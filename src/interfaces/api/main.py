@@ -96,6 +96,28 @@ async def openai_models():
             {"id": "magic-brain:agent", "object": "model", "owned_by": "magic-brain"}
         ]}
 
+
+from fastapi.responses import FileResponse
+
+@app.get("/ui")
+async def dashboard():
+    return FileResponse("/home/der/magic-brain/interfaces/api/dashboard.html")
+
+@app.get("/")
+async def root_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/ui")
+
+from fastapi.responses import FileResponse, RedirectResponse
+
+@app.get("/ui")
+async def dashboard():
+    return FileResponse("/home/der/magic-brain/interfaces/api/dashboard.html")
+
+@app.get("/")
+async def root_redirect():
+    return RedirectResponse(url="/ui")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
