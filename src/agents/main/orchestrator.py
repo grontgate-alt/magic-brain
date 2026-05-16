@@ -12,8 +12,27 @@ from privacy.local_llm.ollama_client import OllamaClient
 from privacy.local_llm.openrouter_client import OpenRouterClient
 from privacy.vault.token_vault import TokenVault
 from agents.brain.registry import registry
+from agents.mcp.adapter import mcp_adapter
 from agents.brain.tool_router import tool_router
 from agents.mcp.client import mcp as mcp_direct
+
+
+def _is_unknown_entity(query: str) -> bool:
+    """Детектирует запросы про неизвестные сущности (мемы, неологизмы, опечатки)"""
+    q = query.lower()
+    # Паттерны "кто такой Х", "что такое Х"
+    m = re.match(r'^(кто|что)\s+(такой|такая|такое|такие)\s+([а-яё\w\-]+)\??$', q.strip())
+    if not m: return False
+    entity = m.group(3)
+    # Проверяем: есть ли слово в базовых словарях/файлах
+    # 1. Частотный список (упрощённо: кириллица + длина)
+    if len(entity) < 3 or len(entity) > 20: return True
+    # 2. Паттерны неологизмов: суффиксы -ян, -ик, -ок, -уш с редкими корнями
+    if re.search(r'[пузжшщ][аоуы]н?$', entity): return True  # пузян, жопик, шушун
+    # 3. Нет пробелов, но есть дефис/цифры — возможно, никнейм
+    if '-' in entity or re.search(r'\d', entity): return True
+    return False
+
 
 class MagicBrain:
     def __init__(self):
@@ -21,6 +40,9 @@ class MagicBrain:
         self.router=PrivacyRouter(); self.embedder=LocalEmbedder(); self.store=RAGStore()
         self.local_llm=OllamaClient(); self.cloud_llm=OpenRouterClient(api_key=os.getenv("OPENROUTER_API_KEY"))
         self.vault=TokenVault()
+
+        # Загрузка MCP-серверов (готовые инструменты)
+        asyncio.create_task(mcp_adapter.register_in_registry(registry)())
 
     def _tag(self, m, mdl, c): return f"[{'🛠️' if m=='tools' else '💬'}{mdl}{' +RAG:'+str(c) if c else ''}]"
 
@@ -61,7 +83,11 @@ class MagicBrain:
             pm = self.router.classify(q)
             p, tok = q, {}
             if pm=="CLOUD" and self.router.needs_scrubbing(q): p, tok = self.vault.scrub(q)
-            fp = f"Отвечай кратко.\nЗапрос: {p}"
+            # Если запрос похож на "кто такой Х" и сущность неизвестна — просим честно ответить
+if _is_unknown_entity(user_query):
+    fp = f"Если ты не знаешь, кто это или что это — так и скажи. Не выдумывай.\nЗапрос: {p}"
+else:
+    fp = f"Отвечай кратко.\nЗапрос: {p}"
             if pm=="LOCAL":
                 r = await asyncio.wait_for(self.local_llm.chat(model="qwen2.5:3b", prompt=fp, context=[]), timeout=10)
                 return r, "qwen2.5:3b", 0

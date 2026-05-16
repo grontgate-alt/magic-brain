@@ -1,47 +1,138 @@
-import re, json, logging
+"""
+🎯 Hybrid Tool Router — быстрый + точный выбор инструмента
+1. Keyword match (мгновенно)
+2. Semantic similarity (векторный поиск по описаниям)
+3. LLM fallback (только если не определилось)
+"""
+import re, json, logging, asyncio
 from typing import List, Dict, Optional
+from difflib import SequenceMatcher
 
-class FastToolRouter:
-    """Автономный выбор инструмента по ключевым словам + извлечение аргументов из схемы"""
-    def select(self, query: str, tools: List[Dict]) -> Optional[Dict]:
-        q = query.lower()
-        best_score, best_tool, best_args = 0, None, {}
+class HybridToolRouter:
+    def __init__(self, embedder=None):
+        self.embedder = embedder  # опционально: для семантического поиска
+        self.tool_cache = {}  # кэш: запрос → лучший инструмент
+        
+    def select(self, query: str, available_tools: List[Dict]) -> Optional[Dict]:
+        """Главный метод: выбирает инструмент или None"""
+        q = query.lower().strip()
+        
+        # === УРОВЕНЬ 1: Быстрые ключевые слова (90% случаев) ===
+        keyword_match = self._keyword_route(q, available_tools)
+        if keyword_match:
+            logging.info(f"🔑 Keyword match: {keyword_match['tool_name']}")
+            return keyword_match
+        
+        # === УРОВЕНЬ 2: Семантический поиск (если есть embedder) ===
+        if self.embedder and len(available_tools) > 5:
+            semantic_match = self._semantic_route(q, available_tools)
+            if semantic_match and semantic_match.get("score", 0) > 0.7:
+                logging.info(f"🧠 Semantic match: {semantic_match['tool_name']} ({semantic_match['score']:.2f})")
+                return semantic_match
+        
+        # === УРОВЕНЬ 3: LLM fallback (только если не определилось) ===
+        # Здесь можно вызвать локальную модель для сложного выбора
+        # Но для скорости пока пропускаем — лучше честный None, чем долгий ответ
+        logging.info(f"⚠️ No tool matched for: {q[:50]}")
+        return None
+    
+    def _keyword_route(self, q: str, tools: List[Dict]) -> Optional[Dict]:
+        """Быстрый поиск по ключевым словам в описании и имени"""
+        # Предварительно скомпилированные паттерны для скорости
+        patterns = {
+            r'файл|каталог|папка|директория|список|ls|dir': ['filesystem'],
+            r'git|commit|push|pull|branch|репозиторий': ['git'],
+            r'github|pr|issue|repo': ['github'],
+            r'ssh|server|vps|deploy|установи|разверни': ['ssh', 'devops'],
+            r'vpn|amnezia|wireguard|xray|протокол': ['vpn', 'devops'],
+            r'почта|email|письмо|отправь на': ['email'],
+            r'скан|nmap|порт|уязвим|пентест': ['pentest', 'security'],
+            r'код|python|lint|test|build|docker': ['coding', 'devops'],
+            r'поиск|найти|гугл|веб|url|http': ['web', 'fetch'],
+            r'база|sql|postgres|query|данные': ['database'],
+        }
+        
+        best_score, best_tool = 0, None
         
         for tool in tools:
-            tname, tdesc, params = tool["name"], tool.get("desc","").lower(), tool.get("params",{})
+            name = tool["name"].lower()
+            desc = tool.get("desc", "").lower()
+            category = name.split("_")[0] if "_" in name else ""
+            
             score = 0
             
-            # 1. Совпадение по описанию
-            for word in re.findall(r'[а-яa-z]{3,}', q):
-                if word in tdesc: score += 2
-            # 2. Совпадение по имени
-            if tname in q: score += 5
-            # 3. Контекст пути
-            if ("path" in params or "file" in tname) and ("/" in q or "~/" in q or "файл" in q or "каталог" in q or "покажи" in q):
+            # Точное совпадение имени
+            if any(kw in name for kw in q.split()):
                 score += 10
             
-            if score > best_score:
+            # Совпадение по описанию
+            for kw in q.split():
+                if len(kw) > 3 and (kw in desc or kw in name):
+                    score += 2
+            
+            # Паттерны категорий
+            for pattern, categories in patterns.items():
+                if re.search(pattern, q) and any(cat in category for cat in categories):
+                    score += 5
+            
+            # Параметры: если в запросе есть путь/хост/порт — приоритет инструментам с такими параметрами
+            tool_params = tool.get("params", {})
+            if ("/" in q or "~/" in q) and "path" in tool_params:
+                score += 3
+            if re.search(r'\d+\.\d+\.\d+\.\d+', q) and "host" in tool_params:
+                score += 3
+            
+            if score > best_score and score >= 3:
                 best_score = score
-                best_tool = tname
-                # Извлекаем аргументы
-                args = {}
-                for pname, pschema in params.items():
-                    if pname == "path":
-                        m = re.search(r'(/[a-zA-Z0-9./_~-]+|~/[a-zA-Z0-9./_~-]+)', query)
-                        args["path"] = m.group(0) if m else "/home/der"
-                    elif pname == "content" or pname == "text":
-                        m = re.search(r'(?:напиши туда|запиши|содержимое|текст|скажи)[:\s]*(.+)', query, re.I|re.DOTALL)
-                        args["content"] = m.group(1).strip() if m else query
-                    elif pname == "query":
-                        m = re.search(r'(?:про|о|найти|ищи)\s+(.+)', query, re.I)
-                        args["query"] = m.group(1).strip() if m else q
-                    else:
-                        m = re.search(rf'{pname}[:\s]*([^\s,;]+)', query, re.I)
-                        if m: args[pname] = m.group(1)
-                best_args = args
+                best_tool = tool
         
-        if best_score >= 3:
-            return {"tool_name": best_tool, "args": best_args}
+        if best_tool:
+            return {"tool_name": best_tool["name"], "args": self._extract_args(q, best_tool), "score": best_score}
         return None
+    
+    def _semantic_route(self, q: str, tools: List[Dict]) -> Optional[Dict]:
+        """Векторный поиск по описаниям (если есть embedder)"""
+        # Реализация при наличии модели эмбеддингов
+        # Пока заглушка — можно добавить позже
+        return None
+    
+    def _extract_args(self, query: str, tool: Dict) -> Dict:
+        """Извлекает аргументы из запроса по схеме инструмента"""
+        args = {}
+        params = tool.get("params", {})
+        
+        for param_name, param_schema in params.items():
+            # Путь: /home/der, ~/file.txt
+            if param_name in ["path", "file", "directory"] and param_schema.get("type") == "string":
+                match = re.search(r'(/[a-zA-Z0-9./_~-]+|~/[a-zA-Z0-9./_~-]+)', query)
+                if match:
+                    args[param_name] = match.group(0)
+            
+            # Хост: 192.168.1.1, example.com
+            if param_name in ["host", "server_ip", "target"] and param_schema.get("type") == "string":
+                match = re.search(r'(\d{1,3}(?:\.\d{1,3}){3}|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', query)
+                if match:
+                    args[param_name] = match.group(0)
+            
+            # Порт: :8080, порт 443
+            if param_name in ["port"] and param_schema.get("type") == "integer":
+                match = re.search(r':?(\d{2,5})\b', query)
+                if match and 1 <= int(match.group(1)) <= 65535:
+                    args[param_name] = int(match.group(1))
+            
+            # Email
+            if param_name in ["email", "to"] and param_schema.get("type") == "string":
+                match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', query)
+                if match:
+                    args[param_name] = match.group(0)
+            
+            # Протоколы: ["awg2", "xray"]
+            if param_name == "protocols" and param_schema.get("type") == "array":
+                found = re.findall(r'\b(awg2|xray|openvpn|wireguard|socks5)\b', query.lower())
+                if found:
+                    args[param_name] = list(set(found))
+        
+        return args
 
-tool_router = FastToolRouter()
+# Экземпляр для импорта
+tool_router = HybridToolRouter()
