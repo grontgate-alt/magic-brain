@@ -1,0 +1,26 @@
+# Правила маршрутизации данных
+routes:
+  - pattern: "пароль|password|token|ключ|секрет|credential|auth"
+    action: BLOCK_CLOUD
+    fallback: LOCAL_LLM
+  - pattern: "личный|приват|конфиденциально|личная переписка|мои данные"
+    action: BLOCK_CLOUD
+    fallback: LOCAL_LLM
+  - pattern: "email|почта|telegram|whatsapp|мессенджер"
+    action: BLOCK_CLOUD
+    fallback: LOCAL_LLM
+  - pattern: "погода|новости|рецепт|википедия|общие_знания|перевод"
+    action: ALLOW_CLOUD
+    fallback: LOCAL_LLM
+
+scrubber:
+  remove:
+    - "\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b"  # карты
+    - "\\b\\+?7[\\s\\-]?\\(?\\d{3}\\)?[\\s\\-]?\\d{3}[\\s\\-]?\\d{2}[\\s\\-]?\\d{2}\\b"  # телефоны РФ
+    - "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[a-zA-Z]{2,}\\b"  # email
+  replace:
+    "имя": "[PERSON]"
+    "адрес": "[ADDRESS]"
+    "телефон": "[PHONE]"
+    "email": "[EMAIL]"
+    "пароль": "[REDACTED]"

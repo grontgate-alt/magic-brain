@@ -1,0 +1,22 @@
+# Иерархия скилов: 1000+ модулей
+categories:
+  - id: communication
+    name: "Коммуникация"
+    skills:
+      - id: email_summarize
+        desc: "Саммари почты"
+        privacy: HIGH
+      - id: telegram_reply
+        desc: "Ответы в Telegram"
+        privacy: HIGH
+  - id: research
+    name: "Исследования"
+    skills:
+      - id: web_search
+        desc: "Поиск в интернете"
+        privacy: LOW
+      - id: paper_review
+        desc: "Анализ статей"
+        privacy: MEDIUM
+  # ... расширяй до 1000+
+  # Формат: category/subcategory/skill_id

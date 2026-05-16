@@ -1,0 +1,10 @@
+*.env
+*.local
+*.log
+coverage/
+.agent/
+node_modules/
+dist/
+*.pem
+*.key
+vault/*.enc

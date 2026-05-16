@@ -1,0 +1,18 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>🦌 Magic Brain</title></head>
+<body style="font-family:system-ui;max-width:700px;margin:auto;padding:20px;">
+<h1>🦌 Домашний Волшебник</h1>
+<p>Приватность: <b>STRICT</b>. Локальный RAG + OpenRouter.</p>
+<div id="log" style="border:1px solid #444;padding:10px;min-height:150px;margin:10px 0;background:#fafafa;"></div>
+<input id="in" placeholder="Запрос..." style="width:70%;padding:8px;">
+<button onclick="ask()">Отправить</button>
+<script>
+async function ask(){
+  const i=document.getElementById('in'), l=document.getElementById('log');
+  l.innerHTML+=`<p><b>Вы:</b> ${i.value}</p>`;
+  try{
+    const r=await fetch('/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:1,text:i.value})});
+    const d=await r.json(); l.innerHTML+=`<p><b>🦌:</b> ${d.reply}</p>`;
+  }catch(e){ l.innerHTML+=`<p style="color:red">Ошибка</p>`; }
+  i.value='';
+}
+</script></body></html>

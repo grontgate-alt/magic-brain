@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="ru" class="dark"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🦌 Magic Brain Admin</title>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/htmx.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+<style>body{font-family:system-ui;background:#0f172a;color:#e2e8f0;padding:20px}
+.card{background:#1e293b;padding:16px;border-radius:12px;margin-bottom:12px}
+.tab{padding:8px 16px;cursor:pointer;border-bottom:2px solid transparent}
+.tab.active{border-bottom:2px solid #38bdf8}
+.btn{background:#3b82f6;color:#fff;padding:6px 12px;border:none;border-radius:6px;cursor:pointer}
+.btn:hover{background:#2563eb} pre{background:#0b1120;padding:10px;border-radius:8px;overflow:auto}
+</style></head><body x-data="{tab:'skills'}">
+<h1 style="margin:0 0 20px">🦌 Magic Brain Admin</h1>
+<div style="display:flex;gap:10px;margin-bottom:20px;border-bottom:1px solid #334155">
+  <div class="tab" :class="{active:tab=='skills'}" @click="tab='skills'">🔧 Скилы & Роутер</div>
+  <div class="tab" :class="{active:tab=='settings'}" @click="tab='settings'">⚙️ Настройки</div>
+  <div class="tab" :class="{active:tab=='logs'}" @click="tab='logs'">📜 Логи</div>
+</div>
+
+<div x-show="tab=='skills'">
+  <div class="card">
+    <h3>Векторный поиск скилов (Qdrant)</h3>
+    <p>Запросы матчатся по описанию + ключевым словам. Приватные фильтры работают автоматически.</p>
+    <button class="btn" hx-post="/admin/api/skills/reload" hx-target="#skill-status">🔄 Перезагрузить реестр</button>
+    <span id="skill-status" style="margin-left:10px;color:#94a3b8"></span>
+    <div id="skill-list" class="card" style="margin-top:10px" hx-get="/admin/api/skills" hx-trigger="load"></div>
+  </div>
+</div>
+
+<div x-show="tab=='settings'">
+  <div class="card">
+    <h3>Текущие параметры</h3>
+    <pre hx-get="/admin/api/settings" hx-trigger="load">Загрузка...</pre>
+  </div>
+</div>
+
+<div x-show="tab=='logs'">
+  <div class="card"><h3>Последние логи API</h3><pre id="logs">tail -f /tmp/api.log...</pre></div>
+</div>
+
+<script>
+  htmx.onLoad(() => {
+    const el = document.getElementById('skill-list');
+    if(el && el.textContent.includes('{')) {
+      try {
+        const d = JSON.parse(el.textContent);
+        el.innerHTML = Object.values(d.skills || {}).map(s => 
+          `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #334155">
+            <span><b>${s.name}</b> <small style="color:#64748b">(${s.privacy})</small></span>
+            <button class="btn" style="background:${s.enabled?'#22c55e':'#ef4444'}"
+              hx-post="/admin/api/skills/toggle" hx-vals='{"skill_id":"${s.id}","enabled":${!s.enabled}}'
+              hx-target="#skill-status">${s.enabled?'ON':'OFF'}</button>
+          </div>`
+        ).join('');
+      } catch(e){}
+    }
+  });
+</script>
+</body></html>

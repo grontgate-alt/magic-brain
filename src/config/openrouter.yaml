@@ -1,0 +1,4 @@
+openrouter:
+  models: ["qwen/qwen-2.5-7b-instruct:free", "meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-chat:free"]
+  timeout: 45
+  fallback_local: true

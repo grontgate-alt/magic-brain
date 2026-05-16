@@ -1,0 +1,19 @@
+[Unit]
+Description=Magic Brain Telegram Bot
+After=network-online.target magic-brain-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=der
+Group=der
+WorkingDirectory=/home/der/magic-brain/src/interfaces/telegram
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/der/.local/bin"
+Environment="HOME=/home/der"
+EnvironmentFile=-/home/der/magic-brain/.env
+ExecStart=/usr/bin/env python3 bot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

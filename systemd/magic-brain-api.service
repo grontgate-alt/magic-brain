@@ -1,0 +1,21 @@
+[Unit]
+Description=Magic Brain API
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=der
+Group=der
+WorkingDirectory=/home/der/magic-brain/src/interfaces/api
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/der/.local/bin"
+Environment="HOME=/home/der"
+EnvironmentFile=-/home/der/magic-brain/.env
+ExecStart=/usr/bin/env python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
