@@ -1,108 +1,83 @@
+"""🎛️ Orchestrator v2.0: Clean API Gateway for AgentLoop"""
+
 import asyncio
 import logging
-import os
-import sys
-import time
-from pathlib import Path
+from datetime import datetime
 
-BASE = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(BASE))
-for ln in (BASE / ".env").read_text().splitlines():
-    if "=" in ln and not ln.strip().startswith("#"):
-        k, v = ln.split("=", 1)
-        os.environ[k.strip()] = v.strip()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
-
-from agents.brain.agent_loop import run as agent_run
-from agents.brain.registry import registry
-from privacy.local_llm.ollama_client import OllamaClient
-from privacy.local_llm.openrouter_client import OpenRouterClient
-from privacy.vault.token_vault import TokenVault
-from rag.embed.local_embedder import LocalEmbedder
-from rag.router.privacy_router import PrivacyRouter
-from rag.store.qdrant_client import RAGStore
+logger = logging.getLogger(__name__)
 
 
 class MagicBrain:
+    """Orchestrator: API → AgentLoop (v2.0 compatible)"""
+
     def __init__(self):
-        logging.info("🧠 MagicBrain init...")
-        self.router = PrivacyRouter()
-        self.embedder = LocalEmbedder()
-        self.store = RAGStore()
-        self.local_llm = OllamaClient()
-        self.cloud_llm = OpenRouterClient(api_key=os.getenv("OPENROUTER_API_KEY"))
-        self.vault = TokenVault()
+        self.registry = None
+        self.loop = None
+        self._init_lock = asyncio.Lock()
 
-    def _tag(self, m, mdl, c):
-        return f"[{'🛠️' if m == 'tools' else '💬'}{mdl}{' +RAG:' + str(c) if c else ''}]"
+    async def _ensure_ready(self):
+        if self.registry is None:
+            async with self._init_lock:
+                if self.registry is None:
+                    from agents.brain.registry import registry
 
-    async def _agent_execute(self, q, uid):
-        logging.info("🔄 Agent Loop starting...")
+                    await registry.reload()
+                    self.registry = registry
+                    from agents.brain.agent_loop import AgentLoop
+
+                    self.loop = AgentLoop(registry)
+                    logger.info("✅ MagicBrain initialized (v2.0)")
+
+    async def process(self, query: str, user_id: int = 1, force_mode: str = None, **kwargs) -> dict:
+        """API entry point: /process"""
+        await self._ensure_ready()
+
+        start = datetime.now()
+        privacy = "CLOUD"
+        model = "agent"
+        context_used = 0
+
         try:
-            result = await agent_run(q, uid, registry)
-            if not result or not result.strip():
-                logging.warning("⚠️ Agent returned empty result")
-                return "⚠️ Агент вернул пустой результат. Проверьте логи."
-            return result
+            # 🎯 Прямой вызов AgentLoop с параметрами из запроса
+            # force_mode: "tools" | "skills" | None (chat)
+            reply = await self.loop.run(query=query, user_id=user_id, force_mode=force_mode)
+
+            # Авто-определение тега
+            if "✅" in reply:
+                tag = "[🛠️agent]"
+            elif "⏱️" in reply:
+                tag = "[⏱️timeout]"
+            elif "⚠️" in reply:
+                tag = "[⚠️error]"
+            else:
+                tag = "[💬chat]"
+
+            return {
+                "reply": reply,
+                "privacy_mode": privacy,
+                "model_used": model,
+                "context_used": context_used,
+                "tag": tag,
+                "time_ms": (datetime.now() - start).total_seconds() * 1000,
+            }
+
         except Exception as e:
-            logging.error(f"💥 Agent Loop crash: {e}")
-            return f"⚠️ Ошибка агента: {e}"
+            logger.exception(f"💥 Orchestrator crash: {e}")
+            return {
+                "reply": f"⚠️ System error: {str(e)[:100]}",
+                "privacy_mode": "LOCAL",
+                "model_used": "error",
+                "context_used": 0,
+                "tag": "[❌crash]",
+                "time_ms": (datetime.now() - start).total_seconds() * 1000,
+            }
 
-    async def _chat_fallback(self, q, uid, start):
-        if time.time() - start > 20:
-            return "⏱️ Таймаут", "timeout", 0
-        try:
-            pm = self.router.classify(q)
-            p, tok = q, {}
-            if pm == "CLOUD" and self.router.needs_scrubbing(q):
-                p, tok = self.vault.scrub(q)
-            fp = f"Отвечай кратко.\nЗапрос: {p}"
-            if pm == "LOCAL":
-                r = await asyncio.wait_for(
-                    self.local_llm.chat(model="qwen2.5:3b", prompt=fp, context=[]), timeout=10
-                )
-                return r, "qwen2.5:3b", 0
-            else:
-                r = await asyncio.wait_for(self.cloud_llm.chat(prompt=fp, context=[]), timeout=10)
-                if tok:
-                    r = self.vault.unscrub(r, tok)
-                return r, "cloud", 0
-        except TimeoutError:
-            return "⏱️ Таймаут", "timeout", 0
-        except Exception:
-            return "⚠️ Ошибка", "error", 0
 
-    async def process(self, user_query, user_id, force_mode=None, force_agent=False, **kw):
-        start = time.time()
-        logging.info(
-            f"🚀 process() called: force_mode={repr(force_mode)}, type={type(force_mode).__name__}"
-        )
+# 🔌 Global instance for API
+brain = MagicBrain()
 
-        force_tools = (force_agent is True) or (str(force_mode or "").lower() == "tools")
-        logging.info(f"🔧 Force tools mode: {force_tools}")
 
-        if force_tools:
-            logging.info("🎯 Attempting agent execution...")
-            res = await self._agent_execute(user_query, user_id)
-            if res and not str(res).startswith("⚠️"):
-                logging.info("✅ Agent succeeded")
-                return {
-                    "reply": res,
-                    "privacy_mode": "tools",
-                    "model_used": "agent",
-                    "context_used": 0,
-                    "tag": self._tag("tools", "agent", 0),
-                }
-            else:
-                logging.warning("⚠️ Agent failed or returned None")
-
-        logging.info("💬 Falling back to chat mode")
-        txt, mu, c = await self._chat_fallback(user_query, user_id, start)
-        pm = "LOCAL" if mu == "qwen2.5:3b" else "CLOUD"
-        return {
-            "reply": txt,
-            "privacy_mode": pm,
-            "model_used": mu,
-            "context_used": c,
-            "tag": self._tag("chat", mu, c),
-        }
+# 🔌 Backward compat: module-level run() if someone imports it
+async def run(query: str, user_id: int = 1, force_mode: str = None, **kwargs):
+    result = await brain.process(query, user_id, force_mode, **kwargs)
+    return result.get("reply", "")
