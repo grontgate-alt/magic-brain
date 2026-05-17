@@ -1,0 +1,38 @@
+id: debug_and_fix
+name: "Поиск и исправление ошибки в скрипте"
+description: "Запускает скрипт, ловит трейсбек, ищет решение, применяет патч, проверяет"
+category: "code"
+version: "1.0.0"
+timeout_sec: 180
+memory_keys: ["error_trace", "fix_applied", "test_result"]
+steps:
+  - id: run_script
+    tool: execute_bash
+    args:
+      command: "python3 {{ file_path }}"
+    on_error: retry
+    max_retries: 1
+
+  - id: extract_traceback
+    tool: execute_bash
+    args:
+      command: "python3 -c \"import sys; sys.stderr.write(sys.exc_info()[1])\""
+    condition: "run_script.status == 'error'"
+
+  - id: web_search_fix
+    tool: web_search
+    args:
+      query: "python3 fix {{ extract_traceback.output[:100] }}"
+    condition: "extract_traceback.status == 'success'"
+
+  - id: apply_patch
+    tool: write_file
+    args:
+      path: "{{ file_path }}"
+      content: "{{ generated_fix }}"
+    condition: "web_search_fix.status == 'success'"
+
+  - id: verify_fix
+    tool: execute_bash
+    args:
+      command: "python3 {{ file_path }}"

@@ -1,0 +1,12 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]  # Ruff сам форматит длинные строки
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
