@@ -79,9 +79,7 @@ class AgentLoop:
             prompt = (
                 f'Q: {query}\nSkills: {skills}\nJSON: {{"type":"skill"|"tools","skill_id":"id"}}'
             )
-            r = await asyncio.wait_for(
-                self.client.chat(prompt=prompt, temperature=0.0), timeout=5.0
-            )
+            r = await asyncio.wait_for(self.client.chat(prompt=prompt), timeout=5.0)
             m = re.search(r"\{.*\}", r or "", re.DOTALL)
             if m:
                 return json.loads(m.group())
@@ -116,9 +114,22 @@ class AgentLoop:
 
     async def _chat(self, p: str) -> str:
         try:
-            r = await asyncio.wait_for(
-                self.client.chat(prompt=p, context=[], temperature=0.1), timeout=10.0
-            )
+            r = await asyncio.wait_for(self.client.chat(prompt=p, context=[]), timeout=10.0)
             return r or "🤖 Готово."
         except Exception:
             return "🤖 (LLM недоступен) Запрос обработан локально."
+
+
+# 🔌 Backward compatibility for orchestrator.py & API
+_default_loop = None
+
+
+async def run(query: str, user_id: int = 1, force_mode: str = None, registry=None):
+    global _default_loop
+    if registry is None:
+        from agents.brain.registry import registry as reg
+
+        registry = reg
+    if _default_loop is None or _default_loop.registry != registry:
+        _default_loop = AgentLoop(registry)
+    return await _default_loop.run(query, user_id, force_mode)
