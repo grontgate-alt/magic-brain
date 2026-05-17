@@ -1,16 +1,9 @@
 """Get minimum versions of dependencies from a pyproject.toml file."""
 
-import sys
-from collections import defaultdict
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    # For Python 3.10 and below, which doesnt have stdlib tomllib
-    import tomli as tomllib
-
 import re
-from typing import List
+import sys
+import tomllib
+from collections import defaultdict
 
 import requests
 from packaging.requirements import Requirement
@@ -34,7 +27,7 @@ SKIP_IF_PULL_REQUEST = [
 ]
 
 
-def get_pypi_versions(package_name: str) -> List[str]:
+def get_pypi_versions(package_name: str) -> list[str]:
     """Fetch all available versions for a package from PyPI.
 
     Args:
@@ -67,14 +60,10 @@ def get_minimum_version(package_name: str, spec_string: str) -> str | None:
     spec_string = re.sub(r"\^0\.0\.(\d+)", r"0.0.\1", spec_string)
     # Rewrite occurrences of ^0.y.z to >=0.y.z,<0.y+1 (can be anywhere in constraint string)
     for y in range(1, 10):
-        spec_string = re.sub(
-            rf"\^0\.{y}\.(\d+)", rf">=0.{y}.\1,<0.{y + 1}", spec_string
-        )
+        spec_string = re.sub(rf"\^0\.{y}\.(\d+)", rf">=0.{y}.\1,<0.{y + 1}", spec_string)
     # Rewrite occurrences of ^x.y.z to >=x.y.z,<x+1.0.0 (can be anywhere in constraint string)
     for x in range(1, 10):
-        spec_string = re.sub(
-            rf"\^{x}\.(\d+)\.(\d+)", rf">={x}.\1.\2,<{x + 1}", spec_string
-        )
+        spec_string = re.sub(rf"\^{x}\.(\d+)\.(\d+)", rf">={x}.\1.\2,<{x + 1}", spec_string)
 
     spec_set = SpecifierSet(spec_string)
     all_versions = get_pypi_versions(package_name)
@@ -91,18 +80,14 @@ def get_minimum_version(package_name: str, spec_string: str) -> str | None:
     return str(min(valid_versions)) if valid_versions else None
 
 
-def _check_python_version_from_requirement(
-    requirement: Requirement, python_version: str
-) -> bool:
+def _check_python_version_from_requirement(requirement: Requirement, python_version: str) -> bool:
     if not requirement.marker:
         return True
     else:
         marker_str = str(requirement.marker)
         if "python_version" in marker_str or "python_full_version" in marker_str:
             python_version_str = "".join(
-                char
-                for char in marker_str
-                if char.isdigit() or char in (".", "<", ">", "=", ",")
+                char for char in marker_str if char.isdigit() or char in (".", "<", ">", "=", ",")
             )
             return check_python_version(python_version, python_version_str)
         return True

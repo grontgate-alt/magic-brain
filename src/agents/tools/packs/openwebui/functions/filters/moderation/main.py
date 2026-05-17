@@ -31,13 +31,15 @@ class Filter:
             return body
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
                     self.valves.SCANNER_URL,
                     json={"prompt": prompt},
                     timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    data = await resp.json()
+                ) as resp,
+            ):
+                data = await resp.json()
         except Exception as e:
             print(f"[Scan] Warning: {e}")
             return body  # fail open on network error

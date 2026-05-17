@@ -9,20 +9,21 @@ version: 0.2.0
 description: Universal AI persona switching with dynamic multi-persona support. Features: mid-prompt persona switching, universal persona detection, smart caching, auto-download, and modular architecture. Commands: !list, !reset, !coder, !writer, plus unlimited combinations.
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Callable, Any
-import re
-import json
 import asyncio
-import time
+import contextlib
+import json
 import os
-import traceback
-import urllib.request
-import urllib.parse
+import re
+import time
 import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+from pydantic import BaseModel, Field
 
 CACHE_DIRECTORY_NAME = "agent_hotswap"
 CONFIG_FILENAME = "personas.json"
@@ -48,12 +49,12 @@ class PersonaDownloadManager:
         except Exception:
             return False
 
-    async def download_personas(self, url: str = None) -> Dict:
+    async def download_personas(self, url: str = None) -> dict:
         """Download personas from remote repository with validation."""
         download_url = url or DEFAULT_PERSONAS_REPO
 
         if not self.is_trusted_domain(download_url):
-            return {"success": False, "error": f"Untrusted domain"}
+            return {"success": False, "error": "Untrusted domain"}
 
         try:
             req = urllib.request.Request(
@@ -92,7 +93,7 @@ class PersonaDownloadManager:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def create_backup(self, current_personas: Dict) -> str:
+    def create_backup(self, current_personas: dict) -> str:
         """Create a timestamped backup of current personas configuration."""
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -119,9 +120,7 @@ class PersonaDownloadManager:
         try:
             backup_files = []
             for filename in os.listdir(backup_dir):
-                if filename.startswith("personas_backup_") and filename.endswith(
-                    ".json"
-                ):
+                if filename.startswith("personas_backup_") and filename.endswith(".json"):
                     filepath = os.path.join(backup_dir, filename)
                     mtime = os.path.getmtime(filepath)
                     backup_files.append((mtime, filepath, filename))
@@ -134,7 +133,7 @@ class PersonaDownloadManager:
         except Exception:
             pass  # Fail silently for cleanup
 
-    async def download_and_apply_personas(self, url: str = None) -> Dict:
+    async def download_and_apply_personas(self, url: str = None) -> dict:
         """Download personas and apply them immediately with backup."""
         download_result = await self.download_personas(url)
         if not download_result["success"]:
@@ -156,9 +155,7 @@ class PersonaDownloadManager:
                 "last_updated": datetime.now().isoformat(),
                 "source_url": url or DEFAULT_PERSONAS_REPO,
                 "version": "auto-downloaded",
-                "persona_count": len(
-                    [k for k in remote_personas.keys() if not k.startswith("_")]
-                ),
+                "persona_count": len([k for k in remote_personas if not k.startswith("_")]),
             }
 
             # Write the new configuration
@@ -168,9 +165,7 @@ class PersonaDownloadManager:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(remote_personas, f, indent=4, ensure_ascii=False)
 
-            print(
-                f"[PERSONA INIT] Downloaded and applied {len(remote_personas)} personas"
-            )
+            print(f"[PERSONA INIT] Downloaded and applied {len(remote_personas)} personas")
 
             return {
                 "success": True,
@@ -182,14 +177,14 @@ class PersonaDownloadManager:
         except Exception as e:
             return {"success": False, "error": f"Failed to apply download: {str(e)}"}
 
-    def _read_current_personas(self) -> Dict:
+    def _read_current_personas(self) -> dict:
         """Read current personas configuration from file."""
         try:
             config_path = self.get_config_filepath()
             if not os.path.exists(config_path):
                 return {}
 
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
@@ -233,23 +228,17 @@ class UniversalPatternCompiler:
             list_cmd = self.valves.list_command_keyword
             if not self.valves.case_sensitive:
                 list_cmd = list_cmd.lower()
-            self.list_pattern = re.compile(
-                rf"{prefix_escaped}{re.escape(list_cmd)}\b", flags
-            )
+            self.list_pattern = re.compile(rf"{prefix_escaped}{re.escape(list_cmd)}\b", flags)
 
             # Compile reset patterns
-            reset_keywords = [
-                word.strip() for word in self.valves.reset_keywords.split(",")
-            ]
+            reset_keywords = [word.strip() for word in self.valves.reset_keywords.split(",")]
             reset_pattern_parts = []
             for keyword in reset_keywords:
                 if not self.valves.case_sensitive:
                     keyword = keyword.lower()
                 reset_pattern_parts.append(re.escape(keyword))
 
-            reset_pattern_str = (
-                rf"{prefix_escaped}(?:{'|'.join(reset_pattern_parts)})\b"
-            )
+            reset_pattern_str = rf"{prefix_escaped}(?:{'|'.join(reset_pattern_parts)})\b"
             self.reset_pattern = re.compile(reset_pattern_str, flags)
 
             # Clear old persona patterns
@@ -259,7 +248,7 @@ class UniversalPatternCompiler:
         except Exception as e:
             print(f"[PATTERN COMPILER] Error compiling patterns: {e}")
 
-    def discover_all_persona_commands(self, message_content: str) -> List[str]:
+    def discover_all_persona_commands(self, message_content: str) -> list[str]:
         """
         Dynamically discover ALL persona commands in content.
         Works with current 50+ personas AND any future additions.
@@ -290,7 +279,7 @@ class UniversalPatternCompiler:
 
         return unique_personas
 
-    def detect_special_commands(self, message_content: str) -> Optional[str]:
+    def detect_special_commands(self, message_content: str) -> str | None:
         """Detect special commands (list, reset) that take precedence."""
         if not message_content:
             return None
@@ -311,7 +300,7 @@ class UniversalPatternCompiler:
 
         return None
 
-    def parse_multi_persona_sequence(self, content: str) -> Dict:
+    def parse_multi_persona_sequence(self, content: str) -> dict:
         """
         Parse content with multiple persona switches into structured sequence.
 
@@ -356,9 +345,7 @@ class UniversalPatternCompiler:
             # (or end of string for last command)
             task_start = match["end"]
             task_end = (
-                persona_matches[i + 1]["start"]
-                if i + 1 < len(persona_matches)
-                else len(content)
+                persona_matches[i + 1]["start"] if i + 1 < len(persona_matches) else len(content)
             )
             task_content = content[task_start:task_end].strip()
 
@@ -383,9 +370,7 @@ class UniversalPatternCompiler:
             )
 
         # Get unique personas requested
-        requested_personas = list(
-            dict.fromkeys(match["persona"] for match in persona_matches)
-        )
+        requested_personas = list(dict.fromkeys(match["persona"] for match in persona_matches))
 
         return {
             "is_multi_persona": len(sequence) > 0,
@@ -403,7 +388,7 @@ class SmartPersonaCache:
         self._file_mtime = 0
         self._last_filepath = None
 
-    def get_personas(self, filepath: str, force_reload: bool = False) -> Dict:
+    def get_personas(self, filepath: str, force_reload: bool = False) -> dict:
         """Get personas with smart caching - only reload if file changed."""
         try:
             if not os.path.exists(filepath):
@@ -414,7 +399,7 @@ class SmartPersonaCache:
             file_modified = current_mtime > self._file_mtime
 
             if force_reload or filepath_changed or file_modified or not self._cache:
-                with open(filepath, "r", encoding="utf-8") as f:
+                with open(filepath, encoding="utf-8") as f:
                     loaded_data = json.load(f)
 
                 self._cache = loaded_data
@@ -506,15 +491,13 @@ class Filter:
                 data_dir = "/app/backend/data"  # Docker installation
             else:
                 home_dir = Path.home()
-                data_dir = str(
-                    home_dir / ".local" / "share" / "open-webui"
-                )  # Native installation
+                data_dir = str(home_dir / ".local" / "share" / "open-webui")  # Native installation
 
         target_dir = os.path.join(data_dir, "cache", "functions", CACHE_DIRECTORY_NAME)
         filepath = os.path.join(target_dir, CONFIG_FILENAME)
         return filepath
 
-    def get_master_controller_persona(self) -> Dict:
+    def get_master_controller_persona(self) -> dict:
         """Returns the master controller persona - always active foundation."""
         return {
             "_master_controller": {
@@ -581,9 +564,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
             print("[PERSONA INIT] Minimal config created successfully")
 
             # Step 2: Now try to download and replace with full collection
-            print(
-                "[PERSONA INIT] Attempting to download complete persona collection..."
-            )
+            print("[PERSONA INIT] Attempting to download complete persona collection...")
             self._download_full_collection_async()
 
         elif needs_update:
@@ -592,14 +573,12 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
             self._download_full_collection_async()
 
         else:
-            print(
-                f"[PERSONA INIT] Personas config found and up-to-date at: {config_path}"
-            )
+            print(f"[PERSONA INIT] Personas config found and up-to-date at: {config_path}")
 
     def _should_update_personas(self, config_path: str) -> bool:
         """Determines if the existing personas config should be updated."""
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 config = json.load(f)
 
             # Check metadata if available
@@ -615,9 +594,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
                         )
                         age_days = (datetime.now() - last_updated).days
                         if age_days > 7:
-                            print(
-                                f"[PERSONA INIT] Config is {age_days} days old, will update"
-                            )
+                            print(f"[PERSONA INIT] Config is {age_days} days old, will update")
                             return True
                     except Exception:
                         pass  # If parsing fails, continue with other checks
@@ -631,18 +608,14 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
                     return True
 
             # Check persona count - if less than 20, probably needs updating
-            display_personas = {
-                k: v for k, v in config.items() if not k.startswith("_")
-            }
+            display_personas = {k: v for k, v in config.items() if not k.startswith("_")}
             if len(display_personas) < 20:
                 print(
                     f"[PERSONA INIT] Only {len(display_personas)} personas found, will update to get full collection"
                 )
                 return True
 
-            print(
-                f"[PERSONA INIT] Config is up-to-date with {len(display_personas)} personas"
-            )
+            print(f"[PERSONA INIT] Config is up-to-date with {len(display_personas)} personas")
             return False
 
         except Exception as e:
@@ -677,9 +650,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
                         # Invalidate cache so the new personas are loaded
                         self.persona_cache.invalidate_cache()
                     else:
-                        print(
-                            f"[PERSONA INIT] Download failed: {download_result['error']}"
-                        )
+                        print(f"[PERSONA INIT] Download failed: {download_result['error']}")
                         print("[PERSONA INIT] Will continue with minimal config")
 
                     loop.close()
@@ -744,15 +715,13 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
                 "last_updated": datetime.now().isoformat(),
                 "source_url": "minimal_config",
                 "version": "minimal",
-                "persona_count": len(
-                    [k for k in minimal_config.keys() if not k.startswith("_")]
-                ),
+                "persona_count": len([k for k in minimal_config if not k.startswith("_")]),
             }
 
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(minimal_config, f, indent=4, ensure_ascii=False)
             print(
-                f"[PERSONA INIT] Minimal config created with {len([k for k in minimal_config.keys() if not k.startswith('_')])} personas"
+                f"[PERSONA INIT] Minimal config created with {len([k for k in minimal_config if not k.startswith('_')])} personas"
             )
         except Exception as e:
             print(f"[PERSONA INIT] Error creating minimal config: {e}")
@@ -762,7 +731,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
         if self.valves.debug_performance:
             print(f"[PERFORMANCE DEBUG] {message}")
 
-    def _load_personas(self) -> Dict:
+    def _load_personas(self) -> dict:
         """Loads personas from the external JSON config file with smart caching."""
         start_time = time.time() if self.valves.debug_performance else 0
 
@@ -770,9 +739,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
             loaded_personas = self.persona_cache.get_personas(self.config_filepath)
 
             if not loaded_personas:
-                print(
-                    "[PERSONA CONFIG] No personas loaded, using master controller only"
-                )
+                print("[PERSONA CONFIG] No personas loaded, using master controller only")
                 loaded_personas = self.get_master_controller_persona()
 
             if self.valves.debug_performance:
@@ -787,7 +754,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
             print(f"[PERSONA CONFIG] Error loading personas: {e}")
             return self.get_master_controller_persona()
 
-    def _load_requested_personas_only(self, requested_personas: List[str]) -> Dict:
+    def _load_requested_personas_only(self, requested_personas: list[str]) -> dict:
         """
         Load ONLY the personas actually requested in the prompt.
         Includes validation and graceful error handling.
@@ -796,9 +763,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
         all_available_personas = self._load_personas()
 
         # Always include Master Controller
-        result = {
-            "_master_controller": all_available_personas.get("_master_controller", {})
-        }
+        result = {"_master_controller": all_available_personas.get("_master_controller", {})}
 
         # Track what we found vs what was requested
         found_personas = []
@@ -821,7 +786,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
 
         return result
 
-    def _create_persona_system_message(self, persona_key: str) -> Dict:
+    def _create_persona_system_message(self, persona_key: str) -> dict:
         """Enhanced system message that ALWAYS includes master controller + selected persona."""
         personas = self._load_personas()
 
@@ -831,9 +796,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
 
         # Add selected persona prompt
         persona = personas.get(persona_key, {})
-        persona_prompt = persona.get(
-            "prompt", f"You are acting as the {persona_key} persona."
-        )
+        persona_prompt = persona.get("prompt", f"You are acting as the {persona_key} persona.")
 
         # Combine: Master Controller + Selected Persona
         system_content = f"{master_prompt}\n\n{persona_prompt}"
@@ -845,9 +808,7 @@ Leverage these capabilities appropriately - use LaTeX for math, Mermaid for diag
 
         return {"role": "system", "content": system_content}
 
-    def _create_dynamic_multi_persona_system(
-        self, requested_personas: List[str]
-    ) -> Dict:
+    def _create_dynamic_multi_persona_system(self, requested_personas: list[str]) -> dict:
         """
         Build dynamic system message with Master Controller + requested personas.
         Works with ANY persona combination, current or future.
@@ -881,16 +842,14 @@ Activation Command: !{persona_key}
         if self.valves.multi_persona_transitions and self.valves.show_persona_info:
             transition_instruction = '3. Announce switches: "🎭 **[Persona Name]**"'
         else:
-            transition_instruction = (
-                "3. Switch personas seamlessly without announcements"
-            )
+            transition_instruction = "3. Switch personas seamlessly without announcements"
 
         multi_persona_instructions = f"""
 
 === DYNAMIC MULTI-PERSONA MODE ===
-Active Personas: {len(loading_info['found'])} loaded on-demand
+Active Personas: {len(loading_info["found"])} loaded on-demand
 
-{(''.join(persona_definitions))}
+{("".join(persona_definitions))}
 
 EXECUTION FRAMEWORK:
 1. Parse user's persona sequence from their original message
@@ -898,9 +857,9 @@ EXECUTION FRAMEWORK:
 {transition_instruction}
 4. Execute the task following each !command until the next !command
 5. Maintain context flow between all switches
-6. Available commands in this session: {', '.join([f'!{p}' for p in loading_info['found']])}
+6. Available commands in this session: {", ".join([f"!{p}" for p in loading_info["found"]])}
 
-{f"⚠️ Unrecognized commands (will be ignored): {', '.join([f'!{p}' for p in loading_info['missing']])}" if loading_info['missing'] else ""}
+{f"⚠️ Unrecognized commands (will be ignored): {', '.join([f'!{p}' for p in loading_info['missing']])}" if loading_info["missing"] else ""}
 
 Execute the user's multi-persona sequence seamlessly.
 === END DYNAMIC MULTI-PERSONA MODE ===
@@ -918,9 +877,7 @@ Execute the user's multi-persona sequence seamlessly.
         flags = 0 if self.valves.case_sensitive else re.IGNORECASE
 
         if keyword_found == "reset":
-            reset_keywords_list = [
-                word.strip() for word in self.valves.reset_keywords.split(",")
-            ]
+            reset_keywords_list = [word.strip() for word in self.valves.reset_keywords.split(",")]
             for r_keyword in reset_keywords_list:
                 pattern_to_remove = rf"{prefix}{re.escape(r_keyword)}\b\s*"
                 content = re.sub(pattern_to_remove, "", content, flags=flags)
@@ -936,9 +893,7 @@ Execute the user's multi-persona sequence seamlessly.
 
         return content.strip()
 
-    def _build_multi_persona_instructions(
-        self, sequence: List[Dict], personas_data: Dict
-    ) -> str:
+    def _build_multi_persona_instructions(self, sequence: list[dict], personas_data: dict) -> str:
         """
         Convert parsed sequence into clear LLM instructions.
         """
@@ -950,9 +905,7 @@ Execute the user's multi-persona sequence seamlessly.
         for i, step in enumerate(sequence, 1):
             persona_key = step["persona"]
             task = step["task"]
-            persona_name = personas_data.get(persona_key, {}).get(
-                "name", persona_key.title()
-            )
+            persona_name = personas_data.get(persona_key, {}).get("name", persona_key.title())
 
             instructions.append(
                 f"""
@@ -1015,21 +968,19 @@ Execute the user's multi-persona sequence seamlessly.
                     "hidden": True,
                 },
             }
-            try:
+            with contextlib.suppress(Exception):
                 await self.event_emitter_for_close_task(update_message)
-            except Exception:
-                pass
             self.active_status_message_id = None
             self.event_emitter_for_close_task = None
 
-    def _find_last_user_message(self, messages: List[Dict]) -> tuple[int, str]:
+    def _find_last_user_message(self, messages: list[dict]) -> tuple[int, str]:
         """Find the last user message in the conversation."""
         for i in range(len(messages) - 1, -1, -1):
             if messages[i].get("role") == "user":
                 return i, messages[i].get("content", "")
         return -1, ""
 
-    def _remove_persona_system_messages(self, messages: List[Dict]) -> List[Dict]:
+    def _remove_persona_system_messages(self, messages: list[dict]) -> list[dict]:
         """Remove existing persona system messages (including master controller)."""
         return [
             msg
@@ -1044,7 +995,7 @@ Execute the user's multi-persona sequence seamlessly.
             )
         ]
 
-    def _generate_persona_table(self, personas: Dict) -> str:
+    def _generate_persona_table(self, personas: dict) -> str:
         """Generate instructions for LLM to create persona table (excludes master controller and metadata)."""
         # Filter out master controller and metadata from display
         display_personas = {
@@ -1098,8 +1049,8 @@ Execute the user's multi-persona sequence seamlessly.
         )
 
     async def _handle_toggle_off_state(
-        self, body: Dict, __event_emitter__: Callable[[dict], Any]
-    ) -> Dict:
+        self, body: dict, __event_emitter__: Callable[[dict], Any]
+    ) -> dict:
         """Handle behavior when filter is toggled off."""
         messages = body.get("messages", [])
         if messages is None:
@@ -1121,11 +1072,11 @@ Execute the user's multi-persona sequence seamlessly.
 
     async def _handle_list_personas_command(
         self,
-        body: Dict,
-        messages: List[Dict],
+        body: dict,
+        messages: list[dict],
         last_message_idx: int,
         __event_emitter__: Callable[[dict], Any],
-    ) -> Dict:
+    ) -> dict:
         """Handle !list command - generates persona table."""
         personas = self._load_personas()
 
@@ -1133,7 +1084,9 @@ Execute the user's multi-persona sequence seamlessly.
         display_personas = {k: v for k, v in personas.items() if not k.startswith("_")}
 
         if not personas or len(display_personas) == 0:
-            list_prompt_content = "No personas are currently available. The system may still be initializing."
+            list_prompt_content = (
+                "No personas are currently available. The system may still be initializing."
+            )
         else:
             list_prompt_content = self._generate_persona_table(personas)
 
@@ -1147,12 +1100,12 @@ Execute the user's multi-persona sequence seamlessly.
 
     async def _handle_reset_command(
         self,
-        body: Dict,
-        messages: List[Dict],
+        body: dict,
+        messages: list[dict],
         last_message_idx: int,
         original_content: str,
         __event_emitter__: Callable[[dict], Any],
-    ) -> Dict:
+    ) -> dict:
         """Handle !reset command - clears current persona."""
         self.current_persona = None
         temp_messages = []
@@ -1170,9 +1123,7 @@ Execute the user's multi-persona sequence seamlessly.
                 and msg.get("role") == "user"
                 and msg.get("content", "") == original_content
             ):
-                cleaned_content = self._remove_keyword_from_message(
-                    original_content, "reset"
-                )
+                cleaned_content = self._remove_keyword_from_message(original_content, "reset")
                 reset_confirmation_prompt = "You have been reset from any specialized persona. Please confirm you are now operating in your default/standard assistant mode."
                 if cleaned_content.strip():
                     msg["content"] = (
@@ -1194,12 +1145,12 @@ Execute the user's multi-persona sequence seamlessly.
     async def _handle_single_persona_command(
         self,
         persona_key: str,
-        body: Dict,
-        messages: List[Dict],
+        body: dict,
+        messages: list[dict],
         last_message_idx: int,
         original_content: str,
         __event_emitter__: Callable[[dict], Any],
-    ) -> Dict:
+    ) -> dict:
         """Handle single persona switching commands like !coder, !writer, etc."""
         personas_data = self._load_personas()
         if persona_key not in personas_data:
@@ -1222,9 +1173,7 @@ Execute the user's multi-persona sequence seamlessly.
                 and msg.get("role") == "user"
                 and msg.get("content", "") == original_content
             ):
-                cleaned_content = self._remove_keyword_from_message(
-                    original_content, persona_key
-                )
+                cleaned_content = self._remove_keyword_from_message(original_content, persona_key)
                 intro_request_default = (
                     "Please introduce yourself and explain what you can help me with."
                 )
@@ -1247,9 +1196,7 @@ Execute the user's multi-persona sequence seamlessly.
                 if not cleaned_content.strip():
                     msg["content"] = intro_request_default
                 else:
-                    persona_name_for_prompt = persona_config.get(
-                        "name", persona_key.title()
-                    )
+                    persona_name_for_prompt = persona_config.get("name", persona_key.title())
                     msg["content"] = (
                         f"Please briefly introduce yourself as {persona_name_for_prompt}. After your introduction, please help with the following: {cleaned_content}"
                     )
@@ -1270,13 +1217,13 @@ Execute the user's multi-persona sequence seamlessly.
 
     async def _handle_multi_persona_command(
         self,
-        sequence_data: Dict,
-        body: Dict,
-        messages: List[Dict],
+        sequence_data: dict,
+        body: dict,
+        messages: list[dict],
         last_message_idx: int,
         original_content: str,
         __event_emitter__: Callable[[dict], Any],
-    ) -> Dict:
+    ) -> dict:
         """
         Handle complex multi-persona sequences.
         """
@@ -1284,9 +1231,7 @@ Execute the user's multi-persona sequence seamlessly.
         sequence = sequence_data["sequence"]
 
         # Build dynamic system message
-        dynamic_system_result = self._create_dynamic_multi_persona_system(
-            requested_personas
-        )
+        dynamic_system_result = self._create_dynamic_multi_persona_system(requested_personas)
         loading_info = dynamic_system_result.pop("loading_info")
 
         # Remove old persona messages
@@ -1295,14 +1240,12 @@ Execute the user's multi-persona sequence seamlessly.
 
         # Build instruction content from the sequence
         all_personas = self._load_personas()
-        instruction_content = self._build_multi_persona_instructions(
-            sequence, all_personas
-        )
+        instruction_content = self._build_multi_persona_instructions(sequence, all_personas)
 
         # Update user message with structured instructions
-        temp_messages[last_message_idx + 1][
-            "content"
-        ] = instruction_content  # +1 because we inserted system message
+        temp_messages[last_message_idx + 1]["content"] = (
+            instruction_content  # +1 because we inserted system message
+        )
 
         body["messages"] = temp_messages
 
@@ -1321,15 +1264,15 @@ Execute the user's multi-persona sequence seamlessly.
 
             status_msg = f"🎭 Multi-persona sequence: {' → '.join(persona_names)}"
             if loading_info["missing"]:
-                status_msg += f" | ⚠️ Unknown: {', '.join([f'!{p}' for p in loading_info['missing']])}"
+                status_msg += (
+                    f" | ⚠️ Unknown: {', '.join([f'!{p}' for p in loading_info['missing']])}"
+                )
 
-            await self._emit_and_schedule_close(
-                __event_emitter__, status_msg, "complete"
-            )
+            await self._emit_and_schedule_close(__event_emitter__, status_msg, "complete")
 
         return body
 
-    def _apply_persistent_persona(self, body: Dict, messages: List[Dict]) -> Dict:
+    def _apply_persistent_persona(self, body: dict, messages: list[dict]) -> dict:
         """Apply current persona to messages when no command detected (ALWAYS includes master controller)."""
         if not self.valves.persistent_persona:
             return body
@@ -1346,9 +1289,7 @@ Execute the user's multi-persona sequence seamlessly.
             return body
 
         # Check if correct persona system message exists
-        expected_persona_name = personas[target_persona].get(
-            "name", target_persona.title()
-        )
+        expected_persona_name = personas[target_persona].get("name", target_persona.title())
         master_controller_expected = "=== OPENWEBUI MASTER CONTROLLER ==="
 
         correct_system_msg_found = False
@@ -1361,9 +1302,7 @@ Execute the user's multi-persona sequence seamlessly.
             if is_system_msg:
                 content = msg.get("content", "")
                 has_master_controller = master_controller_expected in content
-                has_correct_persona = (
-                    f"🎭 **Active Persona**: {expected_persona_name}" in content
-                )
+                has_correct_persona = f"🎭 **Active Persona**: {expected_persona_name}" in content
 
                 if has_master_controller and (
                     not self.valves.show_persona_info or has_correct_persona
@@ -1385,7 +1324,7 @@ Execute the user's multi-persona sequence seamlessly.
         self,
         body: dict,
         __event_emitter__: Callable[[dict], Any],
-        __user__: Optional[dict] = None,
+        __user__: dict | None = None,
     ) -> dict:
         """Main entry point - orchestrates the universal persona switching flow."""
         messages = body.get("messages", [])
@@ -1405,9 +1344,7 @@ Execute the user's multi-persona sequence seamlessly.
             return body
 
         # Find last user message
-        last_message_idx, original_content_of_last_user_msg = (
-            self._find_last_user_message(messages)
-        )
+        last_message_idx, original_content_of_last_user_msg = self._find_last_user_message(messages)
 
         # Handle non-user messages (apply persistent persona)
         if last_message_idx == -1:
@@ -1463,9 +1400,7 @@ Execute the user's multi-persona sequence seamlessly.
             # No persona commands detected, apply persistent persona if active
             return self._apply_persistent_persona(body, messages)
 
-    async def outlet(
-        self, body: dict, __event_emitter__, __user__: Optional[dict] = None
-    ) -> dict:
+    async def outlet(self, body: dict, __event_emitter__, __user__: dict | None = None) -> dict:
         return body
 
     def get_persona_list(self) -> str:
@@ -1480,9 +1415,7 @@ Execute the user's multi-persona sequence seamlessly.
             data = display_personas[keyword]
             name = data.get("name", keyword.title())
             desc = data.get("description", "No description available.")
-            persona_list_items.append(
-                f"• `{self.valves.keyword_prefix}{keyword}` - {name}: {desc}"
-            )
+            persona_list_items.append(f"• `{self.valves.keyword_prefix}{keyword}` - {name}: {desc}")
 
         reset_keywords_display = ", ".join(
             [
@@ -1491,9 +1424,7 @@ Execute the user's multi-persona sequence seamlessly.
             ]
         )
 
-        list_command_display = (
-            f"`{self.valves.keyword_prefix}{self.valves.list_command_keyword}`"
-        )
+        list_command_display = f"`{self.valves.keyword_prefix}{self.valves.list_command_keyword}`"
 
         command_info = (
             f"\n\n**System Commands:**\n"

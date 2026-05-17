@@ -3,16 +3,16 @@ title: Summarizer
 author: assistant
 author_url: https://github.com/pkeffect
 funding_url: https://github.com/open-webui
-project_url: 
+project_url:
 version: 0.1.0
 description: Full-featured conversation summarizer with model selection, priority control, intelligent detection, caching, and other quality improvements.
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-import json
-import time
 import hashlib
+import time
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class Filter:
@@ -74,9 +74,7 @@ class Filter:
         )
 
         # Debug and testing
-        enable_debug: bool = Field(
-            default=True, description="Enable debug logging to console"
-        )
+        enable_debug: bool = Field(default=True, description="Enable debug logging to console")
         test_mode: bool = Field(
             default=True, description="Enable test mode with extra status updates"
         )
@@ -102,7 +100,7 @@ class Filter:
     def _debug_log(self, message: str):
         """Debug logging that's always visible"""
         if self.valves.enable_debug:
-            print(f"\n=== CONV_SUMMARIZER DEBUG ===")
+            print("\n=== CONV_SUMMARIZER DEBUG ===")
             print(f"[{time.strftime('%H:%M:%S')}] {message}")
             print("=============================\n")
 
@@ -120,18 +118,14 @@ class Filter:
                 f"Model selection - Conversation: {current_model}, Summarization: {summary_model}"
             )
         else:
-            self._debug_log(
-                f"Using same model for conversation and summarization: {current_model}"
-            )
+            self._debug_log(f"Using same model for conversation and summarization: {current_model}")
 
-    def _analyze_conversation_state(self, messages: List[Dict]) -> Dict[str, Any]:
+    def _analyze_conversation_state(self, messages: list[dict]) -> dict[str, Any]:
         """Enhanced conversation analysis with smart detection"""
 
         if not self.valves.smart_detection:
             # Fallback to simple counting
-            conv_messages = [
-                m for m in messages if m.get("role") in ["user", "assistant"]
-            ]
+            conv_messages = [m for m in messages if m.get("role") in ["user", "assistant"]]
             return {
                 "total_turns": len(conv_messages),
                 "valid_turns": len(conv_messages),
@@ -149,11 +143,7 @@ class Filter:
         existing_summaries = 0
         for msg in system_msgs:
             content = msg.get("content", "")
-            if (
-                "📋" in content
-                or "Summary" in content
-                or "Previous conversation" in content
-            ):
+            if "📋" in content or "Summary" in content or "Previous conversation" in content:
                 existing_summaries += 1
 
         # Calculate message complexity
@@ -214,9 +204,7 @@ class Filter:
                     technical_messages += 1
 
         valid_messages = [
-            m
-            for m in conv_messages
-            if len(m.get("content", "")) >= self.valves.min_message_length
+            m for m in conv_messages if len(m.get("content", "")) >= self.valves.min_message_length
         ]
         avg_length = total_chars / max(len(valid_messages), 1)
 
@@ -253,9 +241,7 @@ class Filter:
             "technical_messages": technical_messages,
         }
 
-    def _should_summarize_smart(
-        self, conv_state: Dict[str, Any], conversation_id: str
-    ) -> bool:
+    def _should_summarize_smart(self, conv_state: dict[str, Any], conversation_id: str) -> bool:
         """Smart decision on whether to summarize"""
 
         base_threshold = self.valves.summary_trigger_turns
@@ -263,20 +249,14 @@ class Filter:
 
         # Don't summarize if we just did recently
         if conversation_id in self.last_summary_turn_counts:
-            turns_since_last = (
-                current_turns - self.last_summary_turn_counts[conversation_id]
-            )
-            if (
-                turns_since_last < base_threshold * 0.6
-            ):  # Wait at least 60% of threshold
-                self._debug_log(
-                    f"Too soon since last summary ({turns_since_last} turns ago)"
-                )
+            turns_since_last = current_turns - self.last_summary_turn_counts[conversation_id]
+            if turns_since_last < base_threshold * 0.6:  # Wait at least 60% of threshold
+                self._debug_log(f"Too soon since last summary ({turns_since_last} turns ago)")
                 return False
 
         # Don't summarize if there are existing summaries and not much new content
         if conv_state["has_existing_summary"] and current_turns < base_threshold * 1.5:
-            self._debug_log(f"Existing summary present, waiting for more content")
+            self._debug_log("Existing summary present, waiting for more content")
             return False
 
         # Apply adaptive threshold
@@ -285,12 +265,8 @@ class Filter:
             complexity_factor = (conv_state["complexity_score"] - 1.0) * 0.3
             activity_factor = conv_state["recent_activity_score"] * 0.2
 
-            adjusted_threshold = base_threshold * (
-                1 - complexity_factor - activity_factor
-            )
-            adjusted_threshold = max(
-                adjusted_threshold, base_threshold * 0.5
-            )  # Never go below 50%
+            adjusted_threshold = base_threshold * (1 - complexity_factor - activity_factor)
+            adjusted_threshold = max(adjusted_threshold, base_threshold * 0.5)  # Never go below 50%
 
             self._debug_log(
                 f"Adaptive threshold: {adjusted_threshold:.1f} (base: {base_threshold}, complexity: {complexity_factor:.2f}, activity: {activity_factor:.2f})"
@@ -300,7 +276,7 @@ class Filter:
         else:
             return current_turns >= base_threshold
 
-    def _extract_key_information(self, messages: List[Dict]) -> Dict[str, List[str]]:
+    def _extract_key_information(self, messages: list[dict]) -> dict[str, list[str]]:
         """Extract key information from messages for enhanced summarization"""
 
         questions = []
@@ -341,57 +317,57 @@ class Filter:
                     for lang in ["python", "javascript", "sql", "html", "css"]
                 ):
                     technical_terms.append("programming")
-                if any(
-                    db in content.lower()
-                    for db in ["database", "table", "query", "sql"]
-                ):
+                if any(db in content.lower() for db in ["database", "table", "query", "sql"]):
                     technical_terms.append("database")
 
             # Extract numbers and dates (improved)
             words = content.split()
             for word in words:
                 # Numbers
-                if word.replace(",", "").replace(".", "").isdigit() and len(word) <= 6:
-                    numbers_and_dates.append(word)
-                # Dates
-                elif any(
-                    month in word.lower()
-                    for month in [
-                        "jan",
-                        "feb",
-                        "mar",
-                        "apr",
-                        "may",
-                        "jun",
-                        "jul",
-                        "aug",
-                        "sep",
-                        "oct",
-                        "nov",
-                        "dec",
-                    ]
+                if (
+                    word.replace(",", "").replace(".", "").isdigit()
+                    and len(word) <= 6
+                    or any(
+                        month in word.lower()
+                        for month in [
+                            "jan",
+                            "feb",
+                            "mar",
+                            "apr",
+                            "may",
+                            "jun",
+                            "jul",
+                            "aug",
+                            "sep",
+                            "oct",
+                            "nov",
+                            "dec",
+                        ]
+                    )
+                    or word.isdigit()
+                    and 1900 <= int(word) <= 2030
                 ):
-                    numbers_and_dates.append(word)
-                # Years
-                elif word.isdigit() and 1900 <= int(word) <= 2030:
                     numbers_and_dates.append(word)
 
             # Look for decision indicators
-            if any(
-                decision_word in content.lower()
-                for decision_word in [
-                    "decided",
-                    "conclusion",
-                    "result",
-                    "solution",
-                    "answer",
-                    "resolved",
-                    "outcome",
-                    "final",
-                ]
+            if (
+                any(
+                    decision_word in content.lower()
+                    for decision_word in [
+                        "decided",
+                        "conclusion",
+                        "result",
+                        "solution",
+                        "answer",
+                        "resolved",
+                        "outcome",
+                        "final",
+                    ]
+                )
+                and role == "assistant"
+                and len(content) > 50
             ):
-                if role == "assistant" and len(content) > 50:
-                    key_decisions.append(content[:200])
+                key_decisions.append(content[:200])
 
             # Extract topics (first few words of user messages)
             if role == "user" and len(content) > 20:
@@ -410,7 +386,7 @@ class Filter:
             "topics": topics[:4],
         }
 
-    def _create_enhanced_summary(self, messages: List[Dict], quality: str) -> str:
+    def _create_enhanced_summary(self, messages: list[dict], quality: str) -> str:
         """Create enhanced summary based on quality setting"""
 
         # Extract key information
@@ -424,19 +400,13 @@ class Filter:
         if quality == "quick":
             summary_parts = []
             if key_info["questions"]:
-                summary_parts.append(
-                    f"Discussed {len(key_info['questions'])} main question(s)"
-                )
+                summary_parts.append(f"Discussed {len(key_info['questions'])} main question(s)")
             if key_info["technical_terms"]:
-                summary_parts.append(
-                    f"including {', '.join(key_info['technical_terms'][:2])}"
-                )
+                summary_parts.append(f"including {', '.join(key_info['technical_terms'][:2])}")
             if key_info["key_decisions"]:
                 summary_parts.append("with conclusions reached")
 
-            summary = (
-                ". ".join(summary_parts) if summary_parts else "General discussion"
-            )
+            summary = ". ".join(summary_parts) if summary_parts else "General discussion"
             summary += f". Context from {len(messages)} messages preserved."
 
         elif quality == "detailed":
@@ -449,9 +419,7 @@ class Filter:
                 )
 
             if key_info["topics"]:
-                summary_parts.append(
-                    f"Topics covered: {'; '.join(key_info['topics'][:3])}"
-                )
+                summary_parts.append(f"Topics covered: {'; '.join(key_info['topics'][:3])}")
 
             # Add technical context
             if key_info["technical_terms"]:
@@ -467,16 +435,16 @@ class Filter:
 
             # Add decisions/conclusions
             if key_info["key_decisions"]:
-                summary_parts.append(
-                    f"Conclusions: {key_info['key_decisions'][0][:150]}..."
-                )
+                summary_parts.append(f"Conclusions: {key_info['key_decisions'][0][:150]}...")
 
             summary = ". ".join(summary_parts)
             if not summary:
                 summary = f"Comprehensive discussion across {len(messages)} messages with detailed exchanges"
 
             if self.valves.include_context_hints:
-                summary += f". Complete context and technical details preserved for seamless continuation."
+                summary += (
+                    ". Complete context and technical details preserved for seamless continuation."
+                )
 
         else:  # balanced
             summary_parts = []
@@ -487,9 +455,7 @@ class Filter:
                     f"Main topics: {len(key_info['questions'])} key questions/discussions"
                 )
                 if len(key_info["questions"]) > 0:
-                    summary_parts.append(
-                        f"including '{key_info['questions'][0][:80]}...'"
-                    )
+                    summary_parts.append(f"including '{key_info['questions'][0][:80]}...'")
 
             context_items = []
             if key_info["technical_terms"]:
@@ -502,29 +468,25 @@ class Filter:
 
             # Add some key details if available
             if key_info["numbers_and_dates"] and self.valves.preserve_important_details:
-                summary_parts.append(
-                    f"Key details: {', '.join(key_info['numbers_and_dates'][:4])}"
-                )
+                summary_parts.append(f"Key details: {', '.join(key_info['numbers_and_dates'][:4])}")
 
             summary = ". ".join(summary_parts)
             if not summary:
                 summary = f"Ongoing conversation with {len(messages)} substantive message exchanges"
 
             if self.valves.include_context_hints:
-                summary += f". Context preserved for natural continuation."
+                summary += ". Context preserved for natural continuation."
 
         # Ensure reasonable length
         max_length = {"quick": 250, "balanced": 500, "detailed": 800}[quality]
         if len(summary) > max_length:
             summary = summary[: max_length - 3] + "..."
 
-        self._debug_log(
-            f"Generated {quality} summary ({len(summary)} chars): {summary[:100]}..."
-        )
+        self._debug_log(f"Generated {quality} summary ({len(summary)} chars): {summary[:100]}...")
 
         return summary
 
-    def _get_cache_key(self, messages: List[Dict]) -> str:
+    def _get_cache_key(self, messages: list[dict]) -> str:
         """Generate cache key for messages"""
         if not self.valves.enable_caching:
             return ""
@@ -537,8 +499,8 @@ class Filter:
         return hashlib.md5(content_string.encode()).hexdigest()[:16]
 
     async def _create_ai_summary(
-        self, messages: List[Dict], summary_model: str, quality: str
-    ) -> Optional[str]:
+        self, messages: list[dict], summary_model: str, quality: str
+    ) -> str | None:
         """
         Placeholder for future AI-based summarization using the selected model.
         Currently returns None to fall back to enhanced rule-based summarization.
@@ -552,14 +514,10 @@ class Filter:
         # This would require making API calls to Open WebUI's chat completion endpoint
         # with the specified model and a summarization prompt
 
-        self._debug_log(
-            f"AI summarization not yet implemented for model: {summary_model}"
-        )
+        self._debug_log(f"AI summarization not yet implemented for model: {summary_model}")
         return None
 
-    async def inlet(
-        self, body: dict, __event_emitter__, __user__: Optional[dict] = None
-    ) -> dict:
+    async def inlet(self, body: dict, __event_emitter__, __user__: dict | None = None) -> dict:
 
         self._debug_log("=== INLET CALLED ===")
 
@@ -581,9 +539,7 @@ class Filter:
             self._debug_log(f"Filter priority: {self.valves.priority}")
 
             if self.valves.test_mode:
-                model_info = (
-                    f" (using {summary_model})" if summary_model != model else ""
-                )
+                model_info = f" (using {summary_model})" if summary_model != model else ""
                 await __event_emitter__(
                     {
                         "type": "status",
@@ -597,24 +553,21 @@ class Filter:
 
             # Enhanced conversation analysis
             conv_state = self._analyze_conversation_state(messages)
-            conversation_id = f"conv_{len(messages)}_{int(time.time()/100)}"  # Group by ~100 second windows
+            conversation_id = (
+                f"conv_{len(messages)}_{int(time.time() / 100)}"  # Group by ~100 second windows
+            )
 
             self._debug_log(f"Enhanced analysis: {conv_state}")
 
             # Smart decision on summarization
-            should_summarize_smart = self._should_summarize_smart(
-                conv_state, conversation_id
-            )
-            should_summarize = (
-                self.valves.force_summarize_next or should_summarize_smart
-            )
+            should_summarize_smart = self._should_summarize_smart(conv_state, conversation_id)
+            should_summarize = self.valves.force_summarize_next or should_summarize_smart
 
             self._debug_log(
                 f"Should summarize: {should_summarize} (smart: {should_summarize_smart}, force: {self.valves.force_summarize_next})"
             )
 
             if should_summarize:
-
                 self._debug_log("=== STARTING ENHANCED SUMMARIZATION ===")
 
                 # Check cache first
@@ -625,9 +578,7 @@ class Filter:
                     self.performance_stats["cache_hits"] += 1
                     self._debug_log(f"Found cached summary for key: {cache_key}")
 
-                model_display = (
-                    summary_model if summary_model != model else "current model"
-                )
+                model_display = summary_model if summary_model != model else "current model"
                 await __event_emitter__(
                     {
                         "type": "status",
@@ -646,7 +597,6 @@ class Filter:
                 ]
 
                 if len(conversation_messages) > self.valves.preserve_recent_turns:
-
                     # Split conversation
                     messages_to_summarize = conversation_messages[
                         : -self.valves.preserve_recent_turns
@@ -655,17 +605,13 @@ class Filter:
                         -self.valves.preserve_recent_turns :
                     ]
 
-                    self._debug_log(
-                        f"Summarizing {len(messages_to_summarize)} messages"
-                    )
-                    self._debug_log(
-                        f"Preserving {len(messages_to_preserve)} recent messages"
-                    )
+                    self._debug_log(f"Summarizing {len(messages_to_summarize)} messages")
+                    self._debug_log(f"Preserving {len(messages_to_preserve)} recent messages")
 
                     # Create enhanced summary
                     if cached_summary:
                         summary_text = cached_summary
-                        self._debug_log(f"Using cached summary")
+                        self._debug_log("Using cached summary")
                     else:
                         # Try AI summarization if enabled
                         summary_text = None
@@ -677,9 +623,7 @@ class Filter:
                                     self.valves.summary_quality,
                                 )
                                 if summary_text:
-                                    self._debug_log(
-                                        f"Generated AI summary using {summary_model}"
-                                    )
+                                    self._debug_log(f"Generated AI summary using {summary_model}")
                             except Exception as e:
                                 self._debug_log(
                                     f"AI summarization failed: {str(e)}, falling back to enhanced rule-based"
@@ -721,9 +665,7 @@ class Filter:
                             self._debug_log(f"Kept system message: {content[:50]}...")
 
                     # Add our enhanced summary as a system message
-                    model_note = (
-                        f" via {summary_model}" if summary_model != model else ""
-                    )
+                    model_note = f" via {summary_model}" if summary_model != model else ""
                     summary_message = {
                         "role": "system",
                         "content": f"📋 **Conversation Summary** ({len(messages_to_summarize)} messages, {self.valves.summary_quality} quality{model_note}):\n\n{summary_text}\n\n---\n*Recent messages continue below*",
@@ -733,17 +675,13 @@ class Filter:
 
                     # Add preserved recent messages
                     new_messages.extend(messages_to_preserve)
-                    self._debug_log(
-                        f"Added {len(messages_to_preserve)} preserved messages"
-                    )
+                    self._debug_log(f"Added {len(messages_to_preserve)} preserved messages")
 
                     # Update the body
                     body["messages"] = new_messages
 
                     # Update tracking
-                    self.last_summary_turn_counts[conversation_id] = conv_state[
-                        "valid_turns"
-                    ]
+                    self.last_summary_turn_counts[conversation_id] = conv_state["valid_turns"]
 
                     self._debug_log(
                         f"Final message count: {len(new_messages)} (was {len(messages)})"
@@ -821,9 +759,7 @@ class Filter:
             # Return original body on error
             return body
 
-    async def outlet(
-        self, body: dict, __event_emitter__, __user__: Optional[dict] = None
-    ) -> dict:
+    async def outlet(self, body: dict, __event_emitter__, __user__: dict | None = None) -> dict:
         """Outlet - log that we completed processing"""
         self._debug_log("=== OUTLET CALLED ===")
         return body

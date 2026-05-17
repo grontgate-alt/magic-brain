@@ -7,12 +7,9 @@ version: 0.1.0
 required_open_webui_version: 0.3.9
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, Union, Generator, Iterator
-
-import os
-import requests
 import asyncio
+
+from pydantic import BaseModel
 
 
 class Action:
@@ -29,7 +26,7 @@ class Action:
         __user__=None,
         __event_emitter__=None,
         __event_call__=None,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         print(f"action:{__name__}")
 
         response = await __event_call__(

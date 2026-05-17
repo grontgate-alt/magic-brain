@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-import sys, os, uuid
+import os
+import sys
+import uuid
 from pathlib import Path
 
 BASE = Path(__file__).parent.parent.parent
-if str(BASE) not in sys.path: sys.path.insert(0, str(BASE))
+if str(BASE) not in sys.path:
+    sys.path.insert(0, str(BASE))
 os.chdir(BASE)
 
 os.environ.setdefault("QDRANT_HOST", "localhost")
@@ -38,13 +41,13 @@ print(f"🔍 Поиск: '{query}' → найдено {len(results)}\n")
 
 # 3. Показываем
 for i, r in enumerate(results, 1):
-    text = r.get("text", "") or r.get("meta",{}).get("text","")
+    text = r.get("text", "") or r.get("meta", {}).get("text", "")
     m = r.get("meta", {})
     print(f"{i}. {text}")
     print(f"   meta: user_id={m.get('user_id')}, type={m.get('type')}\n")
 
 # 4. Проверка
-found = any(secret in (r.get("text","") or r.get("meta",{}).get("text","")) for r in results)
+found = any(secret in (r.get("text", "") or r.get("meta", {}).get("text", "")) for r in results)
 print(f"{'✅ PASS' if found else '❌ FAIL'}: Секрет найден")
 
 # Очистка

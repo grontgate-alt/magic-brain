@@ -8,13 +8,14 @@ required_open_webui_version: 0.3.17
 license: MIT
 """
 
-import os
-import requests
 import json
+import os
 import time
-from typing import List, Union, Generator, Iterator, Optional, Dict
-from pydantic import BaseModel, Field
+from collections.abc import Generator, Iterator
+
+import requests
 from open_webui.utils.misc import pop_system_message
+from pydantic import BaseModel, Field
 
 
 class Pipe:
@@ -25,17 +26,15 @@ class Pipe:
         self.type = "manifold"
         self.id = "anthropic"
         self.name = "anthropic/"
-        self.valves = self.Valves(
-            **{"ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", "")}
-        )
+        self.valves = self.Valves(**{"ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", "")})
         self.MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB per image
-        
+
         # Model cache
-        self._model_cache: Optional[List[Dict[str, str]]] = None
+        self._model_cache: list[dict[str, str]] | None = None
         self._model_cache_time: float = 0
         self._cache_ttl = int(os.getenv("ANTHROPIC_MODEL_CACHE_TTL", "600"))
 
-    def get_anthropic_models_from_api(self, force_refresh: bool = False) -> List[Dict[str, str]]:
+    def get_anthropic_models_from_api(self, force_refresh: bool = False) -> list[dict[str, str]]:
         """
         Retrieve available Anthropic models from the API.
         Uses caching to reduce API calls.
@@ -69,44 +68,42 @@ class Pipe:
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             }
-            
+
             response = requests.get(
-                "https://api.anthropic.com/v1/models",
-                headers=headers,
-                timeout=10
+                "https://api.anthropic.com/v1/models", headers=headers, timeout=10
             )
-            
+
             if response.status_code != 200:
                 raise Exception(f"HTTP Error {response.status_code}: {response.text}")
-            
+
             data = response.json()
             models = []
-            
+
             for model in data.get("data", []):
-                models.append({
-                    "id": model["id"],
-                    "name": model.get("display_name", model["id"]),
-                })
-            
+                models.append(
+                    {
+                        "id": model["id"],
+                        "name": model.get("display_name", model["id"]),
+                    }
+                )
+
             # Update cache
             self._model_cache = models
             self._model_cache_time = current_time
-            
+
             return models
-            
+
         except Exception as e:
             print(f"Error fetching Anthropic models: {e}")
-            return [
-                {"id": "error", "name": f"Could not fetch models from Anthropic: {str(e)}"}
-            ]
+            return [{"id": "error", "name": f"Could not fetch models from Anthropic: {str(e)}"}]
 
-    def get_anthropic_models(self) -> List[Dict[str, str]]:
+    def get_anthropic_models(self) -> list[dict[str, str]]:
         """
         Get Anthropic models from the API.
         """
         return self.get_anthropic_models_from_api()
 
-    def pipes(self) -> List[dict]:
+    def pipes(self) -> list[dict]:
         return self.get_anthropic_models()
 
     def process_image(self, image_data):
@@ -146,7 +143,7 @@ class Pipe:
                 "source": {"type": "url", "url": url},
             }
 
-    def pipe(self, body: dict) -> Union[str, Generator, Iterator]:
+    def pipe(self, body: dict) -> str | Generator | Iterator:
         system_message, messages = pop_system_message(body["messages"])
 
         processed_messages = []
@@ -166,20 +163,12 @@ class Pipe:
                         if processed_image["source"]["type"] == "base64":
                             image_size = len(processed_image["source"]["data"]) * 3 / 4
                             total_image_size += image_size
-                            if (
-                                total_image_size > 100 * 1024 * 1024
-                            ):  # 100MB total limit
-                                raise ValueError(
-                                    "Total size of images exceeds 100 MB limit"
-                                )
+                            if total_image_size > 100 * 1024 * 1024:  # 100MB total limit
+                                raise ValueError("Total size of images exceeds 100 MB limit")
             else:
-                processed_content = [
-                    {"type": "text", "text": message.get("content", "")}
-                ]
+                processed_content = [{"type": "text", "text": message.get("content", "")}]
 
-            processed_messages.append(
-                {"role": message["role"], "content": processed_content}
-            )
+            processed_messages.append({"role": message["role"], "content": processed_content})
 
         payload = {
             "model": body["model"][body["model"].find(".") + 1 :],
@@ -219,9 +208,7 @@ class Pipe:
                 url, headers=headers, json=payload, stream=True, timeout=(3.05, 60)
             ) as response:
                 if response.status_code != 200:
-                    raise Exception(
-                        f"HTTP Error {response.status_code}: {response.text}"
-                    )
+                    raise Exception(f"HTTP Error {response.status_code}: {response.text}")
 
                 for line in response.iter_lines():
                     if line:
@@ -240,9 +227,7 @@ class Pipe:
                                         if content["type"] == "text":
                                             yield content["text"]
 
-                                time.sleep(
-                                    0.01
-                                )  # Delay to avoid overwhelming the client
+                                time.sleep(0.01)  # Delay to avoid overwhelming the client
 
                             except json.JSONDecodeError:
                                 print(f"Failed to parse JSON: {line}")
@@ -258,16 +243,12 @@ class Pipe:
 
     def non_stream_response(self, url, headers, payload):
         try:
-            response = requests.post(
-                url, headers=headers, json=payload, timeout=(3.05, 60)
-            )
+            response = requests.post(url, headers=headers, json=payload, timeout=(3.05, 60))
             if response.status_code != 200:
                 raise Exception(f"HTTP Error {response.status_code}: {response.text}")
 
             res = response.json()
-            return (
-                res["content"][0]["text"] if "content" in res and res["content"] else ""
-            )
+            return res["content"][0]["text"] if "content" in res and res["content"] else ""
         except requests.exceptions.RequestException as e:
             print(f"Failed non-stream request: {e}")
             return f"Error: {e}"

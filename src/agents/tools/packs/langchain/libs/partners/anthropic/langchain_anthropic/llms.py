@@ -279,7 +279,7 @@ class AnthropicLLM(LLM, _AnthropicCommon):
 
         response = self.client.messages.create(
             messages=self._format_messages(prompt),
-            stop_sequences=stop if stop else None,
+            stop_sequences=stop or None,
             **params,
         )
         return response.content[0].text
@@ -315,7 +315,7 @@ class AnthropicLLM(LLM, _AnthropicCommon):
 
         response = await self.async_client.messages.create(
             messages=self._format_messages(prompt),
-            stop_sequences=stop if stop else None,
+            stop_sequences=stop or None,
             **params,
         )
         return response.content[0].text
@@ -355,7 +355,7 @@ class AnthropicLLM(LLM, _AnthropicCommon):
 
         with self.client.messages.stream(
             messages=self._format_messages(prompt),
-            stop_sequences=stop if stop else None,
+            stop_sequences=stop or None,
             **params,
         ) as stream:
             for event in stream:
@@ -400,7 +400,7 @@ class AnthropicLLM(LLM, _AnthropicCommon):
 
         async with self.async_client.messages.stream(
             messages=self._format_messages(prompt),
-            stop_sequences=stop if stop else None,
+            stop_sequences=stop or None,
             **params,
         ) as stream:
             async for event in stream:

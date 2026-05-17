@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-import sys, os
+import os
+import sys
 from pathlib import Path
+
 BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE))
 
@@ -8,9 +10,10 @@ sys.path.insert(0, str(BASE))
 os.environ.setdefault("QDRANT_HOST", "localhost")
 os.environ.setdefault("QDRANT_PORT", "6333")
 
+import uuid
+
 from rag.embed.local_embedder import LocalEmbedder
 from rag.store.qdrant_client import RAGStore
-import uuid
 
 embedder = LocalEmbedder()
 store = RAGStore()
@@ -42,7 +45,7 @@ for i, r in enumerate(results, 1):
     print(f"   Мета: user_id={m.get('user_id')}, type={m.get('type')}\n")
 
 # 4. Проверка
-found = any(secret in r.get("text","") for r in results)
+found = any(secret in r.get("text", "") for r in results)
 print(f"{'✅ PASS' if found else '❌ FAIL'}: Секрет найден в результатах")
 
 # Очистка теста

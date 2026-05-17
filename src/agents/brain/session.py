@@ -1,8 +1,12 @@
-import os, json, uuid, time, logging
+import json
+import os
+import time
+import uuid
 from pathlib import Path
 
 SESSIONS_DIR = Path(os.path.expanduser("~/.magic-brain/sessions"))
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 class Session:
     def __init__(self, uid: int, query: str):
@@ -13,12 +17,27 @@ class Session:
 
     async def save(self):
         p = SESSIONS_DIR / f"{self.uid}_{self.id}.json"
-        p.write_text(json.dumps({"id":self.id,"uid":self.uid,"query":self.query,"plan":self.plan,
-                                 "step_idx":self.step_idx,"context":self.context,"max_steps":self.max_steps}, indent=2))
+        p.write_text(
+            json.dumps(
+                {
+                    "id": self.id,
+                    "uid": self.uid,
+                    "query": self.query,
+                    "plan": self.plan,
+                    "step_idx": self.step_idx,
+                    "context": self.context,
+                    "max_steps": self.max_steps,
+                },
+                indent=2,
+            )
+        )
 
     def add_result(self, step_id, output, success=True):
-        self.context.append({"step":step_id, "output":str(output)[:800], "success":success, "time":time.time()})
-        if len(self.context) > 4: self.context = self.context[-3:]  # prune
+        self.context.append(
+            {"step": step_id, "output": str(output)[:800], "success": success, "time": time.time()}
+        )
+        if len(self.context) > 4:
+            self.context = self.context[-3:]  # prune
         self.step_idx += 1
 
     @classmethod

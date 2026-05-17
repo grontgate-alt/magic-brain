@@ -6,12 +6,10 @@ funding_url: https://github.com/open-webui
 version: 0.1.2
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, Union, Generator, Iterator
-from open_webui.utils.misc import get_last_user_message
+from collections.abc import Generator, Iterator
 
-import os
 import requests
+from pydantic import BaseModel, Field
 
 
 class Pipe:
@@ -48,22 +46,19 @@ class Pipe:
                 headers["Authorization"] = f"Bearer {self.valves.OPENAI_API_KEY}"
                 headers["Content-Type"] = "application/json"
 
-                r = requests.get(
-                    f"{self.valves.OPENAI_API_BASE_URL}/models", headers=headers
-                )
+                r = requests.get(f"{self.valves.OPENAI_API_BASE_URL}/models", headers=headers)
 
                 models = r.json()
                 return [
                     {
                         "id": model["id"],
-                        "name": f'{self.valves.NAME_PREFIX}{model["name"] if "name" in model else model["id"]}',
+                        "name": f"{self.valves.NAME_PREFIX}{model['name'] if 'name' in model else model['id']}",
                     }
                     for model in models["data"]
                     if "gpt" in model["id"]
                 ]
 
             except Exception as e:
-
                 print(f"Error: {e}")
                 return [
                     {
@@ -79,7 +74,7 @@ class Pipe:
                 },
             ]
 
-    def pipe(self, body: dict, __user__: dict) -> Union[str, Generator, Iterator]:
+    def pipe(self, body: dict, __user__: dict) -> str | Generator | Iterator:
         # This is where you can add your custom pipelines like RAG.
         print(f"pipe:{__name__}")
         print(__user__)

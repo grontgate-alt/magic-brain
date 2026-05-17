@@ -1363,8 +1363,8 @@ class Chroma(VectorStore):
                 documents=texts,
             ):
                 chroma_collection.add_texts(
-                    texts=batch[3] if batch[3] else [],
-                    metadatas=batch[2] if batch[2] else None,  # type: ignore[arg-type]
+                    texts=batch[3] or [],
+                    metadatas=batch[2] or None,  # type: ignore[arg-type]
                     ids=batch[0],
                 )
         else:
@@ -1427,7 +1427,7 @@ class Chroma(VectorStore):
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
         if ids is None:
-            ids = [doc.id if doc.id else str(uuid.uuid4()) for doc in documents]
+            ids = [doc.id or str(uuid.uuid4()) for doc in documents]
         return cls.from_texts(
             texts=texts,
             embedding=embedding,

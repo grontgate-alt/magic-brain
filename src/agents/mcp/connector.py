@@ -1,13 +1,16 @@
-import os, json, logging, asyncio
-from typing import Dict, List
+import asyncio
+import json
+import logging
+import os
+
 
 class MCPConnector:
     def __init__(self, cfg_path: str = os.path.expanduser("~/.mcp/mcp.json")):
         self.cfg_path = cfg_path
-        self._tools: List[Dict] = []
+        self._tools: list[dict] = []
         self._loaded = False
 
-    async def load_tools(self) -> List[Dict]:
+    async def load_tools(self) -> list[dict]:
         if self._loaded:
             return self._tools
         if not os.path.exists(self.cfg_path):
@@ -28,7 +31,7 @@ class MCPConnector:
         logging.info(f"📦 MCP total: {len(self._tools)} tools")
         return self._tools
 
-    async def _fetch(self, name: str, cfg: Dict) -> List[Dict]:
+    async def _fetch(self, name: str, cfg: dict) -> list[dict]:
         env = os.environ.copy()
         for k, v in cfg.get("env", {}).items():
             if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
@@ -37,9 +40,12 @@ class MCPConnector:
                 env[k] = v
 
         proc = await asyncio.create_subprocess_exec(
-            cfg["command"], *cfg.get("args", []),
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env=env
+            cfg["command"],
+            *cfg.get("args", []),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}) + "\n"
         out, err = await asyncio.wait_for(proc.communicate(input=req.encode()), timeout=15)
@@ -48,19 +54,27 @@ class MCPConnector:
         try:
             resp = json.loads(out.decode().strip())
             for t in resp.get("result", {}).get("tools", []):
-                params = {k: {"type": v.get("type", "string")} for k, v in t.get("inputSchema", {}).get("properties", {}).items()}
-                tools.append({
-                    "name": f"mcp_{name}_{t['name']}",
-                    "desc": t.get("description", ""),
-                    "params": params,
-                    "func": lambda q, c, u, srv=name, tn=t["name"], **kw: {"result": f"{srv}/{tn} executed"},
-                    "privacy": "LOCAL" if name in ["filesystem", "git", "sqlite"] else "CLOUD",
-                    "source": f"mcp:{name}"
-                })
+                params = {
+                    k: {"type": v.get("type", "string")}
+                    for k, v in t.get("inputSchema", {}).get("properties", {}).items()
+                }
+                tools.append(
+                    {
+                        "name": f"mcp_{name}_{t['name']}",
+                        "desc": t.get("description", ""),
+                        "params": params,
+                        "func": lambda q, c, u, srv=name, tn=t["name"], **kw: {
+                            "result": f"{srv}/{tn} executed"
+                        },
+                        "privacy": "LOCAL" if name in ["filesystem", "git", "sqlite"] else "CLOUD",
+                        "source": f"mcp:{name}",
+                    }
+                )
         except Exception as e:
             logging.debug(f"Parse error for {name}: {e}")
 
         await proc.wait()
         return tools
+
 
 mcp = MCPConnector()

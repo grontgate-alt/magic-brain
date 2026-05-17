@@ -1,7 +1,11 @@
 """🔄 Agent Loop: Plan → Execute → Context → Replan → Fallback"""
-import logging, asyncio, os
+
+import logging
+import os
+
 from agents.brain.planner import plan, replan
 from privacy.local_llm.openrouter_client import OpenRouterClient
+
 
 class AgentLoop:
     def __init__(self, registry):
@@ -24,17 +28,18 @@ class AgentLoop:
             for step in steps:
                 tool_name = step.get("tool")
                 args = step.get("args", {})
-                
+
                 if tool_name not in self.registry.skills:
                     logging.warning(f"⚠️ Unknown tool: {tool_name}")
-                    success = False; break
+                    success = False
+                    break
 
                 try:
                     func = self.registry.skills[tool_name]["func"]
                     # Передаём ВСЕ аргументы, кроме системных. Python сам разрулит в **kwargs.
-                    exclude = {'q', 'ctx', 'uid', 'query', 'context', 'user_id', 'self', 'tn'}
+                    exclude = {"q", "ctx", "uid", "query", "context", "user_id", "self", "tn"}
                     tool_args = {k: v for k, v in args.items() if k not in exclude}
-                    
+
                     res = await func(query, context, user_id, **tool_args)
                     res_str = res[:500] if isinstance(res, str) else str(res)
                     context.append({"tool": tool_name, "result": res_str})
@@ -43,13 +48,15 @@ class AgentLoop:
                     logging.error(f"❌ {tool_name} failed: {e}")
                     success = False
                     if attempt < self.max_retries:
-                        logging.info(f"🔄 Replan attempt {attempt+1}/{self.max_retries}")
+                        logging.info(f"🔄 Replan attempt {attempt + 1}/{self.max_retries}")
                         steps = await replan(str(e), context, self.registry)
-                        if not steps: break
+                        if not steps:
+                            break
                     else:
                         logging.warning(f"⏭️ Max retries reached for {tool_name}")
                     continue
-            if success or not steps: break
+            if success or not steps:
+                break
 
         if not context:
             return await self._chat(query)

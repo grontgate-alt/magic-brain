@@ -1,8 +1,7 @@
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-
+from fastapi import FastAPI
 from llm_guard.input_scanners import Toxicity
 from llm_guard.input_scanners.toxicity import MatchType
+from pydantic import BaseModel
 
 app = FastAPI(title="LLM Guard Toxicity Filter")
 

@@ -1,7 +1,6 @@
 """Check that no dependencies allow prereleases unless we're releasing a prerelease."""
 
 import sys
-
 import tomllib
 
 if __name__ == "__main__":
@@ -28,9 +27,7 @@ if __name__ == "__main__":
                     f"Dependency {dep_version} has a prerelease version. Please remove this."
                 )
 
-            if isinstance(dep_version, dict) and dep_version.get(
-                "allow-prereleases", False
-            ):
+            if isinstance(dep_version, dict) and dep_version.get("allow-prereleases", False):
                 raise ValueError(
                     f"Dependency {dep_version} has allow-prereleases set to true. Please remove this."
                 )

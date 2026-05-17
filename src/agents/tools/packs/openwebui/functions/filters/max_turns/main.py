@@ -7,14 +7,11 @@ version: 0.1.1
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class Filter:
     class Valves(BaseModel):
-        priority: int = Field(
-            default=0, description="Priority level for the filter operations."
-        )
+        priority: int = Field(default=0, description="Priority level for the filter operations.")
         max_turns_for_users: int = Field(
             default=8,
             description="Maximum allowable conversation turns for a non-admin user.",
@@ -46,7 +43,7 @@ class Filter:
         self.valves = self.Valves()
         pass
 
-    def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
+    def inlet(self, body: dict, __user__: dict | None = None) -> dict:
         # Modify the request body or validate it before processing by the chat completion API.
         # This function is the pre-processor for the API where various checks on the input can be performed.
         # It can also modify the request before sending it to the API.
@@ -75,7 +72,7 @@ class Filter:
 
         return body
 
-    def outlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
+    def outlet(self, body: dict, __user__: dict | None = None) -> dict:
         # Modify or analyze the response body after processing by the API.
         # This function is the post-processor for the API, which can be used to modify the response
         # or perform additional checks and analytics.

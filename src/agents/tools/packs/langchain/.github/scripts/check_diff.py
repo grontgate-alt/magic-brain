@@ -17,11 +17,10 @@ import glob
 import json
 import os
 import sys
+import tomllib
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Set
 
-import tomllib
 from get_min_versions import get_min_version_from_toml
 from packaging.requirements import Requirement
 
@@ -53,7 +52,7 @@ IGNORED_PARTNERS = [
 ]
 
 
-def all_package_dirs() -> Set[str]:
+def all_package_dirs() -> set[str]:
     return {
         "/".join(path.split("/")[:-1]).lstrip("./")
         for path in glob.glob("./libs/**/pyproject.toml", recursive=True)
@@ -91,7 +90,7 @@ def dependents_graph() -> dict:
         package_path = Path(path).parent
         extended_requirement_path = package_path / "extended_testing_deps.txt"
         if extended_requirement_path.exists():
-            with open(extended_requirement_path, "r") as f:
+            with open(extended_requirement_path) as f:
                 extended_deps = f.read().splitlines()
                 for depline in extended_deps:
                     if depline.startswith("-e "):
@@ -114,7 +113,7 @@ def dependents_graph() -> dict:
     return dependents
 
 
-def add_dependents(dirs_to_eval: Set[str], dependents: dict) -> List[str]:
+def add_dependents(dirs_to_eval: set[str], dependents: dict) -> list[str]:
     updated = set()
     for dir_ in dirs_to_eval:
         # handle core manually because it has so many dependents
@@ -127,7 +126,7 @@ def add_dependents(dirs_to_eval: Set[str], dependents: dict) -> List[str]:
     return list(updated)
 
 
-def _get_configs_for_single_dir(job: str, dir_: str) -> List[Dict[str, str]]:
+def _get_configs_for_single_dir(job: str, dir_: str) -> list[dict[str, str]]:
     if job == "test-pydantic":
         return _get_pydantic_test_configs(dir_)
 
@@ -155,9 +154,7 @@ def _get_configs_for_single_dir(job: str, dir_: str) -> List[Dict[str, str]]:
     return [{"working-directory": dir_, "python-version": py_v} for py_v in py_versions]
 
 
-def _get_pydantic_test_configs(
-    dir_: str, *, python_version: str = "3.12"
-) -> List[Dict[str, str]]:
+def _get_pydantic_test_configs(dir_: str, *, python_version: str = "3.12") -> list[dict[str, str]]:
     with open("./libs/core/uv.lock", "rb") as f:
         core_uv_lock_data = tomllib.load(f)
     for package in core_uv_lock_data["package"]:
@@ -177,17 +174,13 @@ def _get_pydantic_test_configs(
         "./libs/core/pyproject.toml", "release", python_version, include=["pydantic"]
     )["pydantic"]
     core_min_pydantic_minor = (
-        core_min_pydantic_version.split(".")[1]
-        if "." in core_min_pydantic_version
-        else "0"
+        core_min_pydantic_version.split(".")[1] if "." in core_min_pydantic_version else "0"
     )
     dir_min_pydantic_version = get_min_version_from_toml(
         f"./{dir_}/pyproject.toml", "release", python_version, include=["pydantic"]
     ).get("pydantic", "0.0.0")
     dir_min_pydantic_minor = (
-        dir_min_pydantic_version.split(".")[1]
-        if "." in dir_min_pydantic_version
-        else "0"
+        dir_min_pydantic_version.split(".")[1] if "." in dir_min_pydantic_version else "0"
     )
 
     max_pydantic_minor = min(
@@ -211,17 +204,15 @@ def _get_pydantic_test_configs(
 
 
 def _get_configs_for_multi_dirs(
-    job: str, dirs_to_run: Dict[str, Set[str]], dependents: dict
-) -> List[Dict[str, str]]:
+    job: str, dirs_to_run: dict[str, set[str]], dependents: dict
+) -> list[dict[str, str]]:
     if job == "lint":
         dirs = add_dependents(
             dirs_to_run["lint"] | dirs_to_run["test"] | dirs_to_run["extended-test"],
             dependents,
         )
     elif job in ["test", "compile-integration-tests", "dependencies", "test-pydantic"]:
-        dirs = add_dependents(
-            dirs_to_run["test"] | dirs_to_run["extended-test"], dependents
-        )
+        dirs = add_dependents(dirs_to_run["test"] | dirs_to_run["extended-test"], dependents)
     elif job == "extended-tests":
         dirs = list(dirs_to_run["extended-test"])
     elif job == "codspeed":
@@ -229,17 +220,13 @@ def _get_configs_for_multi_dirs(
     elif job == "vcr-tests":
         # Only run VCR tests for packages that have cassettes and are affected
         all_affected = set(
-            add_dependents(
-                dirs_to_run["test"] | dirs_to_run["extended-test"], dependents
-            )
+            add_dependents(dirs_to_run["test"] | dirs_to_run["extended-test"], dependents)
         )
         dirs = [d for d in VCR_PACKAGES if d in all_affected]
     else:
         raise ValueError(f"Unknown job: {job}")
 
-    return [
-        config for dir_ in dirs for config in _get_configs_for_single_dir(job, dir_)
-    ]
+    return [config for dir_ in dirs for config in _get_configs_for_single_dir(job, dir_)]
 
 
 def _get_changed_files(args: list[str]) -> list[str]:
@@ -268,9 +255,7 @@ def _get_changed_files(args: list[str]) -> list[str]:
         msg = "Expected changed files JSON to be a list of strings."
         raise ValueError(msg) from e
 
-    if not isinstance(parsed, list) or not all(
-        isinstance(file, str) for file in parsed
-    ):
+    if not isinstance(parsed, list) or not all(isinstance(file, str) for file in parsed):
         msg = "Expected changed files JSON to be a list of strings."
         raise ValueError(msg)
     return parsed
@@ -279,7 +264,7 @@ def _get_changed_files(args: list[str]) -> list[str]:
 if __name__ == "__main__":
     files = _get_changed_files(sys.argv[1:])
 
-    dirs_to_run: Dict[str, set] = {
+    dirs_to_run: dict[str, set] = {
         "lint": set(),
         "test": set(),
         "extended-test": set(),
@@ -351,11 +336,8 @@ if __name__ == "__main__":
             ] != ["README.md"]:
                 dirs_to_run["test"].add(f"libs/partners/{partner_dir}")
                 # Only add to codspeed if the partner has benchmarks and is not ignored
-                if (
-                    partner_dir not in IGNORED_PARTNERS
-                    and os.path.isdir(
-                        f"libs/partners/{partner_dir}/tests/benchmarks"
-                    )
+                if partner_dir not in IGNORED_PARTNERS and os.path.isdir(
+                    f"libs/partners/{partner_dir}/tests/benchmarks"
                 ):
                     dirs_to_run["codspeed"].add(f"libs/partners/{partner_dir}")
             # Skip if the directory was deleted or is just a tombstone readme
@@ -366,8 +348,7 @@ if __name__ == "__main__":
                 # Root-level file in libs/, skip it (no tests needed)
                 continue
             raise ValueError(
-                f"Unknown lib: {file}. check_diff.py likely needs "
-                "an update for this new library!"
+                f"Unknown lib: {file}. check_diff.py likely needs an update for this new library!"
             )
         elif file in [
             "pyproject.toml",

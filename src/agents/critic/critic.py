@@ -7,6 +7,6 @@ class Critic:
         if "не могу" in response.lower() and "помочь" in response.lower():
             issues.append("refusal_detected")  # просто лог, не блокировка
         return True, issues  # ✅ всегда OK
-    
+
     def refine(self, response: str, issues: list) -> str:
         return response  # не меняем ответ
