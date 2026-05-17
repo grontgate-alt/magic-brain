@@ -1,43 +1,66 @@
-import logging
-from agents.brain.session import Session
+"""🔄 Agent Loop: Plan → Execute → Context → Replan → Fallback"""
+import logging, asyncio, os
 from agents.brain.planner import plan, replan
+from privacy.local_llm.openrouter_client import OpenRouterClient
 
-async def run(query: str, uid: int, registry) -> str:
-    session = await Session.create(uid, query)
-    await session.save()
+class AgentLoop:
+    def __init__(self, registry):
+        self.registry = registry
+        self.max_retries = 2
+        self.client = OpenRouterClient(api_key=os.getenv("OPENROUTER_API_KEY"))
 
-    steps = await plan(query, registry)
-    if not steps: return "❌ Не удалось составить план."
-    session.plan = steps
-    await session.save()
-    logging.info(f"📋 Plan: {[s['tool'] for s in steps]}")
+    async def run(self, query: str, user_id: int = 1, force_mode: str = None) -> str:
+        if force_mode != "tools":
+            return await self._chat(query)
 
-    for i, step in enumerate(steps):
-        if i > session.max_steps: break
-        session.step_idx = i
-        tool_name, args = step.get("tool"), step.get("args", {})
+        steps = await plan(query, self.registry)
+        if not steps:
+            logging.info("⚠️ Plan empty → Fallback to chat")
+            return await self._chat(query)
 
-        if tool_name not in registry.skills:
-            session.add_result(i, f"❌ Инструмент {tool_name} отсутствует в реестре", False)
-            await session.save()
-            continue
+        context = []
+        for attempt in range(self.max_retries + 1):
+            success = True
+            for step in steps:
+                tool_name = step.get("tool")
+                args = step.get("args", {})
+                
+                if tool_name not in self.registry.skills:
+                    logging.warning(f"⚠️ Unknown tool: {tool_name}")
+                    success = False; break
 
+                try:
+                    func = self.registry.skills[tool_name]["func"]
+                    # Передаём ВСЕ аргументы, кроме системных. Python сам разрулит в **kwargs.
+                    exclude = {'q', 'ctx', 'uid', 'query', 'context', 'user_id', 'self', 'tn'}
+                    tool_args = {k: v for k, v in args.items() if k not in exclude}
+                    
+                    res = await func(query, context, user_id, **tool_args)
+                    res_str = res[:500] if isinstance(res, str) else str(res)
+                    context.append({"tool": tool_name, "result": res_str})
+                    logging.info(f"✅ {tool_name} OK")
+                except Exception as e:
+                    logging.error(f"❌ {tool_name} failed: {e}")
+                    success = False
+                    if attempt < self.max_retries:
+                        logging.info(f"🔄 Replan attempt {attempt+1}/{self.max_retries}")
+                        steps = await replan(str(e), context, self.registry)
+                        if not steps: break
+                    else:
+                        logging.warning(f"⏭️ Max retries reached for {tool_name}")
+                    continue
+            if success or not steps: break
+
+        if not context:
+            return await self._chat(query)
+
+        summary = "\n".join([f"🛠️ {c['tool']}: {c['result']}" for c in context])
+        synthesis = f"Запрос: {query}\nРезультаты:\n{summary}\n\nДай краткий ответ пользователю."
+        return await self._chat(synthesis)
+
+    async def _chat(self, prompt: str) -> str:
         try:
-            logging.info(f"⚙️ Step {i}: {tool_name}({args})")
-            res = await registry.skills[tool_name]["func"](query, {}, uid, **args)
-            session.add_result(i, res, True)
-            await session.save()
+            return await self.client.chat(prompt=prompt, context=[])
         except Exception as e:
-            err = f"❌ Ошибка {tool_name}: {e}"
-            logging.error(err)
-            session.add_result(i, err, False)
-            await session.save()
-            
-            new_steps = await replan(err, session.context, registry)
-            if new_steps:
-                steps[i+1:] = new_steps
-                logging.info(f"🔄 Plan adjusted")
-                await session.save()
-            else: break
-
-    return session.context[-1]["output"] if session.context else "✅ Выполнено"
+            logging.error(f"❌ Chat fallback failed: {e}")
+            return "⚠️ Ошибка обработки запроса"
