@@ -1,14 +1,16 @@
 import importlib, pkgutil, inspect, os, sys, asyncio, threading, time, re
 from pathlib import Path
 from agents.tools.pack_manager import pack_mgr
-from agents.mcp.connector import mcp
+from agents.tools.packs import meta_skills
+from agents.tools.packs import standard_tools
+from agents.tools.packs import smart_files
+from agents.tools.packs import system_tools
 from agents.mcp.client import mcp as mcp_client
 
 class SkillRegistry:
     def __init__(self):
         self.skills = {}; self._base = Path(__file__).parent.parent / "tools"
         self._packs_loaded = False; self._mcp_loaded = False; self._ready = False
-        self._mcp_task = None
         self._init_lock = asyncio.Lock(); self._load_task = None
         # Не запускаем авто-загрузку здесь — будем ждать явно
     
@@ -53,6 +55,10 @@ class SkillRegistry:
             except: continue
             if fn: self.skills[n]={"func":fn,"desc":m["desc"],"params":{},"privacy":m["privacy"],"type":"pack"}
         self._packs_loaded = True
+        for s in standard_tools.__skills__: self.skills[s["name"]] = s
+        for s in getattr(smart_files, '__skills__', []): self.skills[s['name']] = s
+        for s in getattr(system_tools, '__skills__', []): self.skills[s['name']] = s
+        for s in getattr(meta_skills, "__skills__", []): self.skills[s["name"]] = s
     
     async def load_mcp(self):
         if self._mcp_loaded: return

@@ -12,7 +12,9 @@ from privacy.local_llm.ollama_client import OllamaClient
 from privacy.local_llm.openrouter_client import OpenRouterClient
 from privacy.vault.token_vault import TokenVault
 from agents.brain.registry import registry
+from agents.brain.agent_loop import run as agent_run
 from agents.brain.tool_router import tool_router
+from agents.brain.cloud_router import select as cloud_select
 from agents.mcp.client import mcp as mcp_direct
 
 class MagicBrain:
@@ -25,44 +27,17 @@ class MagicBrain:
     def _tag(self, m, mdl, c): return f"[{'🛠️' if m=='tools' else '💬'}{mdl}{' +RAG:'+str(c) if c else ''}]"
 
     async def _agent_execute(self, q, uid):
-        # === ГАРАНТИРОВАННАЯ ЗАГРУЗКА ===
-        logging.info("🔍 _agent_execute: waiting registry...")
-        loaded = await registry.wait_ready(timeout=10)
-        if not loaded:
-            logging.warning("⚠️ Registry not ready after timeout"); return None
-        logging.info(f"📦 Registry: {len(registry.skills)} tools")
-        
-        tools = registry.list(q)[:10]
-        logging.info(f"🔧 Candidate tools: {tools[:5]}")
-        if not tools: logging.warning("⚠️ No candidate tools"); return None
-        
-        meta = [{"name":t, "desc":registry.skills[t].get("desc",""), "params":registry.skills[t].get("params",{})} for t in tools if t in registry.skills]
-        logging.info(f"📋 Tool meta count: {len(meta)}")
-                # 🔥 INTERCEPT: установка навыков (использует глобальный registry)
-        import re as _r
-        if _r.search(r'(установи|добавь|подключи|install|register).*(навык|инструмент|сервер|skill|tool|mcp|@)', q, _r.IGNORECASE):
-            if 'install_new_skill' in registry.skills:
-                _m = _r.search(r'(@\S+|\S*server\S+)', q)
-                _pkg = _m.group(1) if _m else q.split()[-1]
-                _func = registry.skills['install_new_skill']['func']
-                return await _func(q, {}, uid, source=_pkg, confirm=False)
-
-        dec = tool_router.select(q, meta)
-        logging.info(f"🎯 Router decision: {dec}")
-        if not dec: logging.warning("⚠️ Router returned None"); return None
-        
-        tn, args = dec["tool_name"], dec["args"]
-        logging.info(f"⚙️ Executing: {tn} | args={args}")
-        
-        skill = registry.skills.get(tn)
-        if skill and callable(skill.get("func")):
-            res = await asyncio.wait_for(skill["func"](q, {}, uid, **args), timeout=15)
-        else:
-            res = await asyncio.wait_for(mcp_direct.execute(tn, args), timeout=15)
-        
-        logging.info(f"✅ Tool result: {len(str(res))} chars")
-        return str(res) if res else f"✅ {tn} executed"
-
+        logging.info("🔄 Agent Loop starting...")
+        try:
+            result = await agent_run(q, uid, registry)
+            if not result or not result.strip():
+                logging.warning("⚠️ Agent returned empty result")
+                return "⚠️ Агент вернул пустой результат. Проверьте логи."
+            return result
+        except Exception as e:
+            logging.error(f"💥 Agent Loop crash: {e}")
+            return f"⚠️ Ошибка агента: {e}"
+    
     async def _chat_fallback(self, q, uid, start):
         if time.time()-start > 20: return "⏱️ Таймаут", "timeout", 0
         try:

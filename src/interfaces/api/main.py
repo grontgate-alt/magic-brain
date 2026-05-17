@@ -9,6 +9,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 app = FastAPI(title="Magic Brain API", version="2.1")
+
+@app.on_event("startup")
+async def startup():
+    from agents.brain.registry import registry
+    await registry.reload()
+    print(f"✅ Registry preloaded: {len(registry.skills)} tools")
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class ProcessRequest(BaseModel):

@@ -1,43 +1,26 @@
-from typing import Optional, Dict
-from collections import defaultdict
-import time
+import os, json, uuid, time, logging
+from pathlib import Path
 
-class SessionManager:
-    """Хранит предпочтения режима для каждого пользователя"""
-    def __init__(self, ttl_seconds: int = 3600):
-        self.sessions: Dict[int, dict] = defaultdict(lambda: {
-            "mode": "auto",  # auto|chat|tools|rag_direct|web_search
-            "last_activity": time.time(),
-            "pending_clarification": None,  # если ждём уточнения
-        })
-        self.ttl = ttl_seconds
-    
-    def get(self, user_id: int) -> dict:
-        session = self.sessions[user_id]
-        # TTL cleanup
-        if time.time() - session["last_activity"] > self.ttl:
-            session["mode"] = "auto"
-            session["pending_clarification"] = None
-        session["last_activity"] = time.time()
-        return session
-    
-    def set_mode(self, user_id: int, mode: str):
-        self.sessions[user_id]["mode"] = mode
-        self.sessions[user_id]["pending_clarification"] = None
-    
-    def set_pending(self, user_id: int, query: str, options: list):
-        self.sessions[user_id]["pending_clarification"] = {
-            "query": query, "options": options, "created": time.time()
-        }
-    
-    def clear_pending(self, user_id: int):
-        self.sessions[user_id]["pending_clarification"] = None
-    
-    def get_pending(self, user_id: int) -> Optional[dict]:
-        pending = self.sessions[user_id]["pending_clarification"]
-        if pending and time.time() - pending["created"] > 300:  # 5 мин таймаут
-            self.clear_pending(user_id)
-            return None
-        return pending
+SESSIONS_DIR = Path(os.path.expanduser("~/.magic-brain/sessions"))
+SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
-session_manager = SessionManager()
+class Session:
+    def __init__(self, uid: int, query: str):
+        self.id = str(uuid.uuid4())[:8]
+        self.uid, self.query = uid, query
+        self.plan, self.step_idx, self.context = [], 0, []
+        self.max_steps, self.created = 5, time.time()
+
+    async def save(self):
+        p = SESSIONS_DIR / f"{self.uid}_{self.id}.json"
+        p.write_text(json.dumps({"id":self.id,"uid":self.uid,"query":self.query,"plan":self.plan,
+                                 "step_idx":self.step_idx,"context":self.context,"max_steps":self.max_steps}, indent=2))
+
+    def add_result(self, step_id, output, success=True):
+        self.context.append({"step":step_id, "output":str(output)[:800], "success":success, "time":time.time()})
+        if len(self.context) > 4: self.context = self.context[-3:]  # prune
+        self.step_idx += 1
+
+    @classmethod
+    async def create(cls, uid, query):
+        return cls(uid, query)
