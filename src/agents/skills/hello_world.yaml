@@ -1,0 +1,9 @@
+id: hello_world
+name: "Hello World Test"
+description: "Минимальный тест v2 Engine: просто выводит сообщение"
+category: "test"
+steps:
+  - id: say_hello
+    tool: execute_bash
+    args:
+      command: "echo '✅ SKILL_ENGINE_ACTIVE' && date"

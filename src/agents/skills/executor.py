@@ -1,6 +1,17 @@
+import logging
+import sys
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stderr,
+    force=True,
+)
+logger = logging.getLogger(__name__)
+
 """⚙️ Workflow Executor: Запускает YAML-скилы (v2.0 Logic)"""
 
-import logging
+
 from typing import Any
 
 from jinja2 import Template
