@@ -1,5 +1,3 @@
-"""♻️ Skill Registry: динамический лоадер + приоритет локальных паков над MCP"""
-
 import asyncio
 import importlib
 import inspect
@@ -72,7 +70,6 @@ class SkillRegistry:
             await mcp_client.connect_and_load()
             for tname, meta in mcp_client.tools_meta.items():
                 if tname in self.skills:
-                    logging.debug(f"⏭️ MCP {tname} skipped (local override)")
                     continue
 
                 async def wrap(q, ctx, uid, tn=tname, **kw):

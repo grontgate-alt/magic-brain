@@ -1,5 +1,3 @@
-"""🎛️ Orchestrator: MagicBrain → agent_loop.run() with param mapping"""
-
 import logging
 from datetime import datetime
 
@@ -7,6 +5,9 @@ logger = logging.getLogger(__name__)
 
 
 class MagicBrain:
+    def __init__(self):
+        pass
+
     async def process(
         self,
         query: str,
@@ -19,10 +20,9 @@ class MagicBrain:
         try:
             from agents.brain.agent_loop import run as agent_run
 
-            # 🗝️ Маппинг: force_agent (API) → force_mode (AgentLoop)
             mode = force_mode or force_agent
-            reply = await agent_run(query=query, user_id=user_id, force_mode=mode)
-
+            safe_kwargs = {k: v for k, v in kwargs.items() if k in ("registry",)}
+            reply = await agent_run(query=query, user_id=user_id, force_mode=mode, **safe_kwargs)
             tag = "[🛠️agent]" if "✅" in reply else "[⏱️]" if "⏱️" in reply else "[💬]"
             return {
                 "reply": reply,

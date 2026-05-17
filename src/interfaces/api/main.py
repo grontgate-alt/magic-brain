@@ -11,9 +11,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-app = FastAPI(title="Magic Brain API", version="2.1")
+app = FastAPI(title="Magic Brain API", version="2.3")
 
 
 @app.on_event("startup")
@@ -54,7 +53,7 @@ class ChatReq(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"message": "Magic Brain API", "health": "/health", "tools": "/tools", "docs": "/docs"}
+    return {"message": "Magic Brain API", "health": "/health", "tools": "/tools"}
 
 
 @app.get("/health")
@@ -68,10 +67,9 @@ async def process(req: ProcessRequest):
     try:
         from agents.main.orchestrator import MagicBrain
 
-        result = await MagicBrain().process(
+        return await MagicBrain().process(
             req.text, req.user_id, force_mode=req.force_mode, force_agent=req.force_agent
         )
-        return result
     except Exception as e:
         logging.error(f"Process error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -97,13 +95,12 @@ async def list_models():
                 "llm": [m["name"] for m in r.json().get("models", [])],
                 "cloud": ["openrouter:auto"],
             }
-    except Exception:
+    except:
         return {"llm": ["qwen2.5:3b"], "cloud": ["openrouter:auto"]}
 
 
 @app.post("/v1/chat/completions")
 async def openai_chat(req: ChatReq):
-    logging.info(f"OpenAI endpoint: model={req.model}, messages={len(req.messages)}")
     try:
         user_msg = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
         force = "agent" in (req.model or "").lower()
@@ -127,7 +124,7 @@ async def openai_chat(req: ChatReq):
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
     except Exception as e:
-        logging.error(f"OpenAI endpoint error: {e}", exc_info=True)
+        logging.error(f"OpenAI error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -144,13 +141,10 @@ async def openai_models():
             ]
         models.append({"id": "magic-brain:agent", "object": "model", "owned_by": "magic-brain"})
         return {"object": "list", "data": models}
-    except Exception:
+    except:
         return {
             "object": "list",
-            "data": [
-                {"id": "qwen2.5:3b", "object": "model", "owned_by": "ollama"},
-                {"id": "magic-brain:agent", "object": "model", "owned_by": "magic-brain"},
-            ],
+            "data": [{"id": "qwen2.5:3b", "object": "model", "owned_by": "ollama"}],
         }
 
 

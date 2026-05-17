@@ -1,131 +1,75 @@
-"""🧠 Планировщик: строгий JSON, пост-валидация имён, 0 hallucination"""
+"""🧭 Planner v2.3: Strict JSON Tool Planning"""
+import logging, json, re
+from typing import List, Dict, Optional
 
-import inspect
-import json
-import logging
-import os
-import re
-from typing import Any
+logger = logging.getLogger(__name__)
 
-from agents.brain.tool_db import get_routes, get_tools_by_route
-from privacy.local_llm.openrouter_client import OpenRouterClient
+# 🎯 Системный промпт: жёсткие правила
+SYSTEM_PROMPT = """You are a tool planner. You MUST output STRICT JSON array of tool calls.
+Available tools: write_file, execute_bash, web_search, read_file, smart_file_op.
+Rules:
+1. Return ONLY JSON array: [{"tool": "name", "args": {"key": "value"}}]
+2. For file creation: use write_file with path and content
+3. For poetry: use web_search first, then write_file
+4. NEVER output markdown, explanations, or bash snippets — only JSON
+5. If task is impossible, return []
 
+Example for "create file with Pushkin poem":
+[
+  {"tool": "web_search", "args": {"query": "Пушкин Руслан и Людмила начало текст"}},
+  {"tool": "write_file", "args": {"path": "/home/der/111.txt", "content": "{{search_result}}"}}
+]
+"""
 
-async def _call_openrouter(prompt: str) -> str:
-    client = OpenRouterClient(api_key=os.getenv("OPENROUTER_API_KEY"))
-    sig = inspect.signature(client.chat)
-    allowed = set(sig.parameters.keys()) - {"self"}
-    kwargs = {"prompt": prompt, "context": [], "temperature": 0.0}
-    extra = {"response_format": {"type": "json_object"}}
-    for k, v in extra.items():
-        if k in allowed:
-            kwargs[k] = v
-    try:
-        return await client.chat(**kwargs)
-    except Exception as e:
-        logging.error(f"❌ OpenRouter: {e}")
-        return "{}"
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    if not text or not isinstance(text, str):
-        return {}
-    patterns = [
-        r"```(?:json)?\s*(\{.*?\})\s*```",
-        r'(\{[\s\S]*"steps"[\s\S]*\})',
-        r'(\{[\s\S]*"route"[\s\S]*\})',
-        r"(\{.*\})",
-    ]
-    for p in patterns:
-        m = re.search(p, text, re.DOTALL)
-        if m:
-            try:
-                res = json.loads(m.group(1) if m.lastindex else m.group(0))
-                if isinstance(res, dict):
-                    return res
-            except Exception:
-                continue
-    return {}
-
-
-async def plan(query: str, registry) -> list[dict]:
-    routes: list[tuple[str, str]] = get_routes()
-    if not routes:
+async def plan(query: str, registry) -> List[Dict]:
+    """Returns list of tool calls: [{"tool": "...", "args": {...}}]"""
+    from privacy.local_llm.openrouter_client import OpenRouterClient
+    
+    client = OpenRouterClient(api_key=__import__('os').getenv("OPENROUTER_API_KEY"))
+    if not client:
+        logger.warning("⚠️ No LLM client, empty plan")
         return []
-
-    # 1. Выбор маршрута
-    route_hints = "\n".join([f"- {r[0]}: {r[1]}" for r in routes])
-    p1 = f"""Ты — роутер. Запрос: {query}
-Доступные категории:
-{route_hints}
-Выбери ОДНУ. Верни строго JSON: {{"route": "domain/category/subcategory"}}"""
+    
+    tools_list = ", ".join([k for k in registry.skills.keys() if not k.startswith("_")])
+    prompt = f"Task: {query}\nTools: {tools_list}\nReturn JSON array of tool calls."
+    
     try:
-        r1 = await _call_openrouter(p1)
-        data1 = _extract_json(r1)
-        selected = data1.get("route") if isinstance(data1, dict) else None
-        valid_routes = [r[0] for r in routes]
-        if not selected or selected not in valid_routes:
-            selected = routes[0][0]
-        logging.info(f"🧭 Intent Route: {selected}")
-    except Exception as e:
-        logging.warning(f"⚠️ Route fallback: {e}")
-        selected = routes[0][0]
-
-    # 2. Инструменты
-    tools = get_tools_by_route(selected)
-    if not tools:
-        fb = next((r[0] for r in routes if r[0] != selected), routes[0][0])
-        tools = get_tools_by_route(fb)
-
-    tool_names = [t["name"] for t in tools]
-
-    # 3. Планирование (анти-галлюцинационный промпт)
-    p2 = f"""Запрос: {query}
-Доступные инструменты: {tool_names}
-Схема: {json.dumps(tools, ensure_ascii=False, indent=2)}
-Верни строго JSON: {{"steps": [{{"tool": "ИМЯ_ИЗ_СПИСКА_ВЫШЕ", "args": {{...}}}}]}}
-ВАЖНО: Не выдумывай названия. Используй ТОЛЬКО то, что есть в списке "Доступные инструменты"."""
-
-    try:
-        r2 = await _call_openrouter(p2)
-        data2 = _extract_json(r2)
-        if not isinstance(data2, dict):
-            return []
-        steps = data2.get("steps", [])
-        if not isinstance(steps, list):
-            return []
-
-        # ЖЁСТКАЯ ВАЛИДАЦИЯ: оставляем только шаги с реальными именами
-        valid_steps = [s for s in steps if isinstance(s, dict) and s.get("tool") in tool_names]
-
-        if valid_steps:
-            logging.info(f"📋 Plan parsed: {[s.get('tool') for s in valid_steps]}")
-            return valid_steps
-        logging.warning(
-            f"⚠️ LLM hallucinated tool names. Returned: {[s.get('tool') for s in steps]}"
+        # Запрос с жёстким температурным контролем
+        response = await client.chat(
+            prompt=f"{SYSTEM_PROMPT}\n\nUser: {prompt}",
+            temperature=0.0,  # Детерминированный вывод
+            max_tokens=500
         )
-        return []
-    except Exception as e:
-        logging.error(f"💥 Plan: {e}")
-        return []
-
-
-async def replan(error: str, context: list, registry) -> list[dict]:
-    available = list(registry.skills.keys())
-    try:
-        p = f"""Шаг упал. Ошибка: {error}
-Контекст: {json.dumps(context[-3:], ensure_ascii=False)}
-Доступные: {available}
-Верни: {{"steps": [{{"tool": "ИМЯ_ИЗ_СПИСКА", "args": {{}}}}]}}"""
-        resp = await _call_openrouter(p)
-        data = _extract_json(resp)
-        if not isinstance(data, dict):
+        
+        # Извлекаем JSON из ответа
+        match = re.search(r'\[.*\]', response, re.DOTALL)
+        if not match:
+            logger.warning(f"⚠️ Planner: no JSON in response: {response[:100]}")
             return []
-        steps = data.get("steps", [])
-        return (
-            [s for s in steps if isinstance(s, dict) and s.get("tool") in available]
-            if isinstance(steps, list)
-            else []
-        )
-    except Exception:
+        
+        plan_result = json.loads(match.group())
+        if not isinstance(plan_result, list):
+            logger.warning("⚠️ Planner: response is not array")
+            return []
+        
+        # Валидация: каждый шаг должен иметь tool и args
+        validated = []
+        for step in plan_result:
+            if isinstance(step, dict) and "tool" in step and "args" in step:
+                if step["tool"] in registry.skills:
+                    validated.append(step)
+                else:
+                    logger.warning(f"⚠️ Unknown tool: {step['tool']}")
+        
+        logger.info(f"🧭 Plan: {len(validated)} steps")
+        return validated
+        
+    except Exception as e:
+        logger.error(f"💥 Planner error: {e}")
         return []
+
+async def replan(error: str, context: List, registry) -> List[Dict]:
+    """Replan after error — упрощённая версия"""
+    logger.warning(f"🔄 Replanning after: {error[:50]}")
+    # Возвращаем пустой план — fallback на чат
+    return []
