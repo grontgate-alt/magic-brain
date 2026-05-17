@@ -1,157 +1,152 @@
-"""⚙️ Workflow Executor: async state machine для композитных скилов."""
+"""⚙️ Workflow Executor: Запускает YAML-скилы (v2.0 Logic)"""
 
-import asyncio
 import logging
 from typing import Any
 
-from jinja2 import Template  # pip install jinja2
+from jinja2 import Template
 
-from agents.brain.registry import registry as tool_registry
+from agents.brain.registry import registry
 from agents.skills.schema import SkillDefinition
+
+logger = logging.getLogger(__name__)
+
+
+class ExecutionError(Exception):
+    pass
 
 
 class ExecutionContext:
-    """Контекст выполнения скила: переменные, шаги, ошибки."""
+    """Хранит состояние выполнения: переменные, историю шагов."""
 
-    def __init__(self, user_id: int, query: str):
+    def __init__(self, user_id: int, query: str, initial_vars: dict | None = None):
         self.user_id = user_id
         self.query = query
-        self.variables: dict[str, Any] = {"query": query}
-        self.step_results: dict[str, dict] = {}
-        self.current_step: str | None = None
-        self.error: str | None = None
+        self.variables: dict[str, Any] = {
+            "user_id": user_id,
+            "query": query,
+            **(initial_vars or {}),
+        }
+        self.history: list[dict] = []
 
-    def get(self, key: str, default=None):
-        """Доступ к переменным через {{ var }} в шаблонах."""
-        return self.variables.get(key, default)
-
-    def set(self, key: str, value: Any):
+    def set_var(self, key: str, value: Any):
         self.variables[key] = value
 
-    def step_done(self, step_id: str, result: Any, success: bool = True):
-        self.step_results[step_id] = {
-            "result": result,
+    def log_step(self, step_id: str, tool: str, result: Any, success: bool):
+        entry = {
+            "step_id": step_id,
+            "tool": tool,
             "success": success,
-            "status": "ok" if success else "error",
+            "result": str(result)[:500],  # Ограничиваем длину лога
         }
-        if success and isinstance(result, (str, dict)):
-            # Авто-экспорт результата в переменные для следующих шагов
-            if isinstance(result, str) and len(result) < 200:
-                self.variables[f"{step_id}_output"] = result
+        self.history.append(entry)
+        if success:
+            # Авто-экспорт: результат шага 'foo' доступен как {{ foo_output }}
+            if isinstance(result, str):
+                self.set_var(f"{step_id}_output", result)
             elif isinstance(result, dict):
                 for k, v in result.items():
-                    self.variables[f"{step_id}_{k}"] = v
+                    self.set_var(f"{step_id}_{k}", v)
 
 
-class WorkflowExecutor:
-    """Исполнитель скилов: шаг за шагом, с условиями и восстановлением."""
+class SkillExecutor:
+    """
+    Исполнитель скилов.
+    Берет SkillDefinition -> Итерирует шаги -> Рендерит аргументы -> Вызывает Tool.
+    """
 
-    def __init__(self, timeout_sec: int = 120):
-        self.timeout_sec = timeout_sec
+    def __init__(self):
+        self.registry = registry
 
-    async def execute(self, skill: SkillDefinition, user_id: int, query: str) -> dict[str, Any]:
-        """Запускает скил как state machine. Возвращает {success: bool, result: Any, error: str}."""
+    async def run_skill(
+        self, skill_def: SkillDefinition, user_id: int, query: str
+    ) -> dict[str, Any]:
         ctx = ExecutionContext(user_id, query)
-        try:
-            return await asyncio.wait_for(self._run_steps(skill, ctx), timeout=self.timeout_sec)
-        except TimeoutError:
-            return {
-                "success": False,
-                "error": f"Timeout after {self.timeout_sec}s",
-                "partial": ctx.step_results,
-            }
-        except Exception as e:
-            logging.error(f"💥 Workflow crash: {e}")
-            return {"success": False, "error": str(e), "partial": ctx.step_results}
+        logger.info(f"🚀 START Skill: {skill_def.name} ({skill_def.id})")
 
-    async def _run_steps(self, skill: SkillDefinition, ctx: ExecutionContext) -> dict[str, Any]:
-        for step in skill.steps:
-            ctx.current_step = step.id
+        for step in skill_def.steps:
+            # 1. Проверка условия (например: "run_script.success == True")
+            if step.condition:
+                if not self._check_condition(step.condition, ctx):
+                    logger.info(f"⏭️ Step '{step.id}' skipped (condition false)")
+                    continue
 
-            # 1. Проверка условия (Jinja-шаблон)
-            if step.condition and not self._eval_condition(step.condition, ctx):
-                logging.info(f"⏭️ Step {step.id} skipped (condition false)")
+            # 2. Рендер аргументов (например: "path: {{ file_path }}")
+            rendered_args = self._render_args(step.args, ctx)
+            tool_name = step.tool
+
+            # 3. Поиск инструмента
+            if tool_name not in self.registry.skills:
+                err_msg = f"Tool '{tool_name}' not found in Registry"
+                logger.error(f"❌ {err_msg}")
+                ctx.log_step(step.id, tool_name, err_msg, False)
+                if step.on_error == "abort":
+                    return {"success": False, "error": err_msg, "history": ctx.history}
                 continue
 
-            # 2. Подготовка аргументов (рендер шаблонов)
-            args = self._render_args(step.args, ctx)
+            # 4. Выполнение инструмента
+            try:
+                tool_func = self.registry.skills[tool_name]["func"]
+                # Стандартная сигнатура наших инструментов: func(q, ctx_list, uid, **kwargs)
+                # Мы передаем историю как context_list для совместимости, но в v2.0 она доступна через Jinja
+                result = await tool_func(query, [], user_id, **rendered_args)
+                ctx.log_step(step.id, tool_name, result, True)
+                logger.info(f"✅ Step '{step.id}' OK")
 
-            # 3. Выполнение инструмента
-            success, result = await self._call_tool(step.tool, args, ctx)
+            except Exception as e:
+                logger.error(f"❌ Step '{step.id}' FAILED: {e}")
+                ctx.log_step(step.id, tool_name, str(e), False)
 
-            # 4. Обработка результата
-            ctx.step_done(step.id, result, success)
-
-            if not success:
+                # Обработка ошибок
                 if step.on_error == "abort":
-                    return {
-                        "success": False,
-                        "error": f"Step {step.id} failed",
-                        "at": step.id,
-                        "partial": ctx.step_results,
-                    }
+                    return {"success": False, "error": str(e), "history": ctx.history}
                 elif step.on_error == "retry":
-                    for attempt in range(step.max_retries):
-                        logging.info(f"🔄 Retry {step.id} ({attempt + 1}/{step.max_retries})")
-                        success, result = await self._call_tool(step.tool, args, ctx)
-                        if success:
-                            ctx.step_done(step.id, result, True)
-                            break
-                    if not success:
+                    logger.info(f"🔄 Retrying step '{step.id}'...")
+                    try:
+                        # Повторная попытка (рендер заново, вдруг переменные изменились)
+                        new_args = self._render_args(step.args, ctx)
+                        result = await tool_func(query, [], user_id, **new_args)
+                        ctx.log_step(step.id, tool_name, result, True)
+                    except Exception as retry_e:
+                        logger.error(f"❌ Retry FAILED for '{step.id}': {retry_e}")
+                        ctx.log_step(f"{step.id}_retry", tool_name, str(retry_e), False)
                         return {
                             "success": False,
-                            "error": f"Step {step.id} failed after retries",
-                            "at": step.id,
-                            "partial": ctx.step_results,
+                            "error": f"Retry failed: {retry_e}",
+                            "history": ctx.history,
                         }
-                # on_error == "skip" → просто продолжаем
+                # Если on_error == "skip", просто идем дальше
 
-        # Успешное завершение
-        final_result = (
-            ctx.step_results.get(skill.steps[-1].id, {}).get("result") if skill.steps else None
-        )
-        return {"success": True, "result": final_result, "context": ctx.variables}
+        logger.info(f"🏁 FINISH Skill: {skill_def.name}")
+        return {"success": True, "result": ctx.variables, "history": ctx.history}
 
-    def _eval_condition(self, condition: str, ctx: ExecutionContext) -> bool:
-        """Простая оценка условий: 'step.status == "success"' или 'var > 10'."""
+    def _check_condition(self, condition: str, ctx: ExecutionContext) -> bool:
+        """Безопасный eval условий: 'step_x.success == True'"""
         try:
-            # Безопасный eval через locals
-            safe_globals = {"__builtins__": {}}
-            safe_locals = {**{sid: sr for sid, sr in ctx.step_results.items()}, **ctx.variables}
-            # Заменяем шаг.статус на доступный формат
-            expr = condition.replace(".status", '["success"]').replace(".output", '["result"]')
-            return bool(eval(expr, safe_globals, safe_locals))
+            # Собираем контекст для eval: переменные + история шагов
+            # История доступна по ключу step_id: { "run_script": {"success": True, ...} }
+            eval_ctx = dict(ctx.variables)
+            for entry in ctx.history:
+                eval_ctx[entry["step_id"]] = entry
+
+            return bool(eval(condition, {"__builtins__": {}}, eval_ctx))
         except Exception as e:
-            logging.warning(f"⚠️ Condition eval failed '{condition}': {e}")
+            logger.warning(f"⚠️ Condition eval error: {e}")
             return False
 
     def _render_args(self, args: dict[str, Any], ctx: ExecutionContext) -> dict[str, Any]:
-        """Рендерит {{ var }} в аргументах через Jinja2."""
+        """Рендер Jinja2 шаблонов в аргументах: '{{ query }}', '{{ file_path }}'"""
         rendered = {}
-        for k, v in args.items():
-            if isinstance(v, str) and "{{" in v:
+        for key, value in args.items():
+            if isinstance(value, str) and "{{" in value:
                 try:
-                    rendered[k] = Template(v).render(
-                        **ctx.variables, **{sid: sr for sid, sr in ctx.step_results.items()}
-                    )
+                    t = Template(value)
+                    # Пробрасываем все переменные и историю в шаблон
+                    # История доступна как {{ run_script.output }} и т.д.
+                    history_dict = {h["step_id"]: h for h in ctx.history}
+                    rendered[key] = t.render(**ctx.variables, **history_dict)
                 except Exception as e:
-                    logging.warning(f"⚠️ Template render failed for {k}: {e}")
-                    rendered[k] = v
+                    logger.warning(f"⚠️ Template render fail '{key}': {e}")
+                    rendered[key] = value
             else:
-                rendered[k] = v
+                rendered[key] = value
         return rendered
-
-    async def _call_tool(
-        self, tool_name: str, args: dict[str, Any], ctx: ExecutionContext
-    ) -> tuple[bool, Any]:
-        """Вызывает инструмент из registry. Возвращает (success, result)."""
-        if tool_name not in tool_registry.skills:
-            return False, f"Tool '{tool_name}' not found"
-        try:
-            func = tool_registry.skills[tool_name]["func"]
-            # Универсальный вызов: все инструменты принимают (q, ctx, uid, **kwargs)
-            result = await func(ctx.query, list(ctx.step_results.values()), ctx.user_id, **args)
-            return True, result
-        except Exception as e:
-            logging.error(f"❌ Tool {tool_name} failed: {e}")
-            return False, str(e)
