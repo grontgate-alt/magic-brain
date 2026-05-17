@@ -1,4 +1,4 @@
-"""🔄 Agent Loop v2.2: Production-Hardened, Zero-LLM-Block, Systemd-Ready"""
+"""🔄 Agent Loop v2.3: Production-Stable, Skills First, Safe LLM"""
 
 import asyncio
 import inspect
@@ -12,11 +12,10 @@ from agents.skills.executor import SkillExecutor
 from agents.skills.schema import SkillsRegistry
 from privacy.local_llm.openrouter_client import OpenRouterClient
 
-# 📢 Гарантированный вывод в stderr (systemd/journalctl)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stderr)],
+    stream=sys.stderr,
     force=True,
 )
 logger = logging.getLogger(__name__)
@@ -30,61 +29,66 @@ class AgentLoop:
         try:
             self.skills_registry.load()
         except Exception as e:
-            logger.warning(f"⚠️ Skills load failed: {e}")
+            logger.warning(f"⚠️ Skills load: {e}")
         self.skill_executor = SkillExecutor()
 
     async def run(self, query: str, user_id: int = 1, force_mode: str = None) -> str:
-        logger.info(f"📥 RUN: force={force_mode}, q='{query[:60]}'")
+        logger.info(f"📥 RUN: mode={force_mode}, q='{query[:50]}...'")
         try:
+            # 1. Skills mode: прямой вызов
             if force_mode == "skills":
                 sid = self._detect_skill_fast(query)
                 if sid:
                     return await self._execute_skill(sid, user_id, query)
-                return "⚠️ Скил не найден. Пример: 'запусти hello_world'"
+                return "⚠️ Скил не найден. Доступны: " + ", ".join(
+                    self.skills_registry._registry.keys()
+                )
 
+            # 2. Tools mode: планировщик
             if force_mode == "tools":
                 return await self._run_tool_loop(query, user_id)
 
+            # 3. Default: чат
             return await self._chat(query)
         except Exception:
-            logger.exception("💥 CRASH in run()")
-            return "⚠️ Внутренняя ошибка. Запрос записан в лог."
+            logger.exception("💥 AgentLoop.run")
+            return "⚠️ Ошибка обработки. Запрос записан."
 
     def _detect_skill_fast(self, query: str) -> str | None:
         q = query.lower()
         for s in self.skills_registry._registry.values():
             if s.id.lower() in q or s.name.lower() in q:
+                logger.info(f"🎯 Skill detected: {s.id}")
                 return s.id
         return None
 
     async def _execute_skill(self, skill_id: str, user_id: int, query: str) -> str:
-        logger.info(f"🎯 Executing Skill: {skill_id}")
+        logger.info(f"🚀 Executing Skill: {skill_id}")
         if skill_id not in self.skills_registry._registry:
             return f"⚠️ Skill '{skill_id}' not found"
         skill = self.skills_registry.get(skill_id)
-        params = {"file_path": m.group(1)} if (m := re.search(r"(/[\w/.\-]+)", query)) else {}
+        params = {}
+        if m := re.search(r"(/[\w/.\-]+)", query):
+            params["file_path"] = m.group(1)
         try:
             res = await asyncio.wait_for(
                 self.skill_executor.run_skill(skill, user_id, query, initial_vars=params),
-                timeout=30.0,
+                timeout=20.0,
             )
-            return (
-                f"✅ {skill.name} completed."
-                if res.get("success")
-                else f"⚠️ Failed: {res.get('error')}"
-            )
+            if res.get("success"):
+                return f"✅ {skill.name} completed."
+            return f"⚠️ Failed: {res.get('error', 'unknown')}"
         except TimeoutError:
-            return "⏱️ Skill timeout (15s)"
+            return "⏱️ Skill timeout (20s)"
         except Exception as e:
-            return f"⚠️ Skill error: {e}"
+            return f"⚠️ Error: {e}"
 
     async def _run_tool_loop(self, query: str, user_id: int) -> str:
         try:
-            steps = await asyncio.wait_for(plan(query, self.registry), timeout=30.0)
+            steps = await asyncio.wait_for(plan(query, self.registry), timeout=15.0)
             if not steps:
-                logger.warning("📋 Planner returned empty. Fallback to direct execution.")
+                logger.warning("📋 Empty plan, fallback to chat")
                 return await self._chat(query)
-
             ctx = []
             for step in steps[:3]:
                 t, a = step.get("tool"), step.get("args", {})
@@ -97,34 +101,34 @@ class AgentLoop:
                         func(
                             query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude}
                         ),
-                        timeout=30.0,
+                        timeout=15.0,
                     )
                     ctx.append(f"🛠️ {t}: {str(res)[:100]}")
                 except Exception as e:
-                    logger.error(f"❌ Tool {t} failed: {e}")
+                    logger.error(f"❌ Tool {t}: {e}")
             return "\n".join(ctx) if ctx else await self._chat(query)
         except Exception as e:
-            logger.error(f"💥 Tool loop failed: {e}")
+            logger.error(f"💥 Tool loop: {e}")
             return await self._chat(query)
 
-    async def _chat(self, p: str) -> str:
+    async def _chat(self, prompt: str) -> str:
         if not self.client:
-            return "🤖 LLM client unavailable."
+            return "🤖 LLM unavailable."
         try:
             sig = inspect.signature(self.client.chat)
-            kwargs = {"prompt": p}
+            kwargs = {"prompt": prompt}
             if "context" in sig.parameters:
                 kwargs["context"] = []
             resp = await asyncio.wait_for(self.client.chat(**kwargs), timeout=30.0)
             return (resp or "").strip() or "🤖 Готово."
         except TimeoutError:
-            return "⏱️ LLM timeout (10s)"
+            return "⏱️ LLM timeout (30s)"
         except Exception as e:
-            logger.warning(f"⚠️ LLM chat failed: {e}")
-            return "🤖 (LLM недоступен) Локальная обработка завершена."
+            logger.warning(f"⚠️ LLM error: {e}")
+            return "🤖 (LLM error) Запрос обработан."
 
 
-# 🔌 Backward compatibility for orchestrator.py
+# 🔌 Backward compat for orchestrator.py
 _default_loop = None
 
 
