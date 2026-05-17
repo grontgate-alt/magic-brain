@@ -35,6 +35,7 @@ class AgentLoop:
     async def run(self, query: str, user_id: int = 1, force_mode: str = None) -> str:
         logger.info(f"📥 RUN: mode={force_mode}, q='{query[:50]}...'")
         try:
+            # 1. Skills mode: прямой вызов
             if force_mode == "skills":
                 sid = self._detect_skill_fast(query)
                 if sid:
@@ -42,8 +43,12 @@ class AgentLoop:
                 return "⚠️ Скил не найден. Доступны: " + ", ".join(
                     self.skills_registry._registry.keys()
                 )
+
+            # 2. Tools mode: планировщик
             if force_mode == "tools":
                 return await self._run_tool_loop(query, user_id)
+
+            # 3. Default: чат
             return await self._chat(query)
         except Exception:
             logger.exception("💥 AgentLoop.run")
@@ -68,11 +73,9 @@ class AgentLoop:
                 self.skill_executor.run_skill(skill, user_id, query, initial_vars=params),
                 timeout=20.0,
             )
-            return (
-                f"✅ {skill.name} completed."
-                if res.get("success")
-                else f"⚠️ Failed: {res.get('error', 'unknown')}"
-            )
+            if res.get("success"):
+                return f"✅ {skill.name} completed."
+            return f"⚠️ Failed: {res.get('error', 'unknown')}"
         except TimeoutError:
             return "⏱️ Skill timeout (20s)"
         except Exception as e:
@@ -82,6 +85,7 @@ class AgentLoop:
         try:
             steps = await asyncio.wait_for(plan(query, self.registry), timeout=15.0)
             if not steps:
+                logger.warning("📋 Empty plan, fallback to chat")
                 return await self._chat(query)
             ctx = []
             for step in steps[:3]:
@@ -90,8 +94,9 @@ class AgentLoop:
                     continue
                 try:
                     exclude = {"q", "ctx", "uid", "query", "context", "user_id", "self", "tn"}
+                    func = self.registry.skills[t]["func"]
                     res = await asyncio.wait_for(
-                        self.registry.skills[t]["func"](
+                        func(
                             query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude}
                         ),
                         timeout=15.0,
@@ -113,7 +118,7 @@ class AgentLoop:
             if "context" in sig.parameters:
                 kwargs["context"] = []
             resp = await asyncio.wait_for(self.client.chat(**kwargs), timeout=30.0)
-            return (resp or " ").strip() or "🤖 Готово."
+            return (resp or "").strip() or "🤖 Готово."
         except TimeoutError:
             return "⏱️ LLM timeout (30s)"
         except Exception as e:

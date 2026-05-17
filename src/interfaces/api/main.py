@@ -11,8 +11,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 app = FastAPI(title="Magic Brain API", version="2.1")
 
 
@@ -97,7 +97,7 @@ async def list_models():
                 "llm": [m["name"] for m in r.json().get("models", [])],
                 "cloud": ["openrouter:auto"],
             }
-    except:
+    except Exception:
         return {"llm": ["qwen2.5:3b"], "cloud": ["openrouter:auto"]}
 
 
@@ -144,7 +144,7 @@ async def openai_models():
             ]
         models.append({"id": "magic-brain:agent", "object": "model", "owned_by": "magic-brain"})
         return {"object": "list", "data": models}
-    except:
+    except Exception:
         return {
             "object": "list",
             "data": [

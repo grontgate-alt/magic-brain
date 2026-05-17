@@ -1,4 +1,4 @@
-"""🎛️ Orchestrator: MagicBrain → agent_loop.run()"""
+"""🎛️ Orchestrator: MagicBrain → agent_loop.run() with param mapping"""
 
 import logging
 from datetime import datetime
@@ -8,14 +8,19 @@ logger = logging.getLogger(__name__)
 
 class MagicBrain:
     async def process(
-        self, query: str, user_id: int = 1, force_mode: str = None, force_agent=None, **kwargs
+        self,
+        query: str,
+        user_id: int = 1,
+        force_mode: str = None,
+        force_agent: str = None,
+        **kwargs,
     ) -> dict:
         start = datetime.now()
         try:
             from agents.brain.agent_loop import run as agent_run
 
-            # force_agent (bool) → force_mode (string)
-            mode = force_mode or ("skills" if force_agent else None)
+            # 🗝️ Маппинг: force_agent (API) → force_mode (AgentLoop)
+            mode = force_mode or force_agent
             reply = await agent_run(query=query, user_id=user_id, force_mode=mode)
 
             tag = "[🛠️agent]" if "✅" in reply else "[⏱️]" if "⏱️" in reply else "[💬]"

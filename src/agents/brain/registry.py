@@ -41,8 +41,8 @@ class SkillRegistry:
                             "privacy": m.get("privacy", "CLOUD"),
                             "type": "static",
                         }
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Static load error {f}: {e}")
 
     async def load_packs(self):
         if self._packs_loaded:
@@ -71,13 +71,11 @@ class SkillRegistry:
 
             await mcp_client.connect_and_load()
             for tname, meta in mcp_client.tools_meta.items():
-                # Локальные инструменты имеют ПРИОРИТЕТ. Не перезаписываем.
                 if tname in self.skills:
                     logging.debug(f"⏭️ MCP {tname} skipped (local override)")
                     continue
 
                 async def wrap(q, ctx, uid, tn=tname, **kw):
-                    # Передаём только аргументы инструмента, без query
                     return await mcp_client.execute(tn, kw)
 
                 self.skills[tname] = {
