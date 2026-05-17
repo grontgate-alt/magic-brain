@@ -1,18 +1,11 @@
 """🔄 Agent Loop v2.0: Tools (v1) & Skills (v2)"""
-
-import asyncio
-import json
-import logging
-import os
-import re
-
+import logging, os, json, re, asyncio
 from agents.brain.planner import plan, replan
-from agents.skills.executor import SkillExecutor
 from agents.skills.schema import SkillsRegistry
+from agents.skills.executor import SkillExecutor
 from privacy.local_llm.openrouter_client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
-
 
 class AgentLoop:
     def __init__(self, registry):
@@ -26,58 +19,66 @@ class AgentLoop:
     async def run(self, query: str, user_id: int = 1, force_mode: str = None) -> str:
         if force_mode not in ["tools", "skills"]:
             return await self._chat(query)
+
+        # 1. Быстрый детектор (мгновенно, без LLM)
+        skill_id = self._detect_skill_fast(query)
+        if skill_id:
+            return await self._execute_skill(skill_id, user_id, query)
+
+        # 2. LLM-роутинг (с жестким таймаутом 5с)
         intent = await self._route_intent(query)
-
         if intent.get("type") == "skill" and intent.get("skill_id"):
-            sid = intent["skill_id"]
-            if sid in self.skills_registry._registry:
-                logger.info(f"🧠 Routing to Skill: {sid}")
-                params = await self._extract_params(query)
-                try:
-                    res = await asyncio.wait_for(
-                        self.skill_executor.run_skill(
-                            self.skills_registry.get(sid), user_id, query, initial_vars=params
-                        ),
-                        timeout=60.0,
-                    )
-                    return (
-                        f"✅ {self.skills_registry.get(sid).name} completed."
-                        if res["success"]
-                        else f"⚠️ Failed: {res.get('error')}"
-                    )
-                except TimeoutError:
-                    return "⏱️ Skill timeout"
+            return await self._execute_skill(intent["skill_id"], user_id, query)
 
+        # 3. Fallback на v1 Tools
         logger.info("🛠️ Fallback to v1 Tool Planner")
         return await self._run_tool_loop(query, user_id)
 
+    def _detect_skill_fast(self, query: str) -> str | None:
+        """Детерминированный поиск скила по ID или имени в запросе."""
+        q = query.lower()
+        for s in self.skills_registry._registry.values():
+            if s.id.lower() in q or s.name.lower() in q:
+                return s.id
+        return None
+
+    async def _execute_skill(self, skill_id: str, user_id: int, query: str) -> str:
+        logger.info(f"🎯 Executing Skill: {skill_id}")
+        if skill_id not in self.skills_registry._registry:
+            return f"⚠️ Skill '{skill_id}' not found"
+        skill = self.skills_registry.get(skill_id)
+        params = await self._extract_params(query)
+        try:
+            res = await asyncio.wait_for(
+                self.skill_executor.run_skill(skill, user_id, query, initial_vars=params),
+                timeout=45.0
+            )
+            if res["success"]:
+                return f"✅ {skill.name} completed."
+            return f"⚠️ Skill failed: {res.get('error', 'unknown')}"
+        except asyncio.TimeoutError:
+            return "⏱️ Skill execution timeout"
+
     async def _extract_params(self, query: str) -> dict:
         p = {}
-        paths = re.findall(r"(/\S+)", query)
+        paths = re.findall(r'(/[\w/.\-]+)', query)
         if paths:
             p["file_path"] = paths[0]
-        for k, v in re.findall(r"(\w+)[:=](\S+)", query):
-            p[k.lower()] = v
         return p
 
     async def _route_intent(self, query: str) -> dict:
-        skills = "\n".join(
-            [f"- {s.id}: {s.description}" for s in self.skills_registry._registry.values()]
-        )
-        prompt = f"""Analyze: "{query}"
-Available Skills: {skills or "None"}
-Return JSON: {{"type": "skill"|"tools", "skill_id": "id_if_skill"}}"""
+        """LLM-роутер с защитой от зависаний."""
         try:
-            r = await asyncio.wait_for(
-                self.client.chat(prompt=prompt, temperature=0.1), timeout=15.0
-            )
-            m = re.search(r"\{.*\}", r, re.DOTALL)
+            skills = ", ".join([s.id for s in self.skills_registry._registry.values()])
+            prompt = f"Query: {query}\nAvailable Skills: {skills}\nReturn JSON: {{\"type\": \"skill\"|\"tools\", \"skill_id\": \"id\"}}"
+            r = await asyncio.wait_for(self.client.chat(prompt=prompt, temperature=0.0), timeout=5.0)
+            m = re.search(r'\{.*\}', r, re.DOTALL)
             if m:
                 return json.loads(m.group())
-        except TimeoutError:
-            logger.warning("⏱️ Routing timeout")
+        except asyncio.TimeoutError:
+            logger.warning("⏱️ LLM routing timeout, skipping")
         except Exception as e:
-            logger.warning(f"⚠️ Routing fail: {e}")
+            logger.warning(f"⚠️ LLM routing failed: {e}")
         return {"type": "tools"}
 
     async def _run_tool_loop(self, query: str, user_id: int) -> str:
@@ -94,9 +95,7 @@ Return JSON: {{"type": "skill"|"tools", "skill_id": "id_if_skill"}}"""
                     break
                 try:
                     exclude = {"q", "ctx", "uid", "query", "context", "user_id", "self", "tn"}
-                    res = await self.registry.skills[t]["func"](
-                        query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude}
-                    )
+                    res = await self.registry.skills[t]["func"](query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude})
                     ctx.append({"tool": t, "result": str(res)[:500]})
                 except Exception as e:
                     logger.error(f"❌ {t}: {e}")
@@ -108,11 +107,7 @@ Return JSON: {{"type": "skill"|"tools", "skill_id": "id_if_skill"}}"""
                 break
         if not ctx:
             return await self._chat(query)
-        return await self._chat(
-            f"Query: {query}\nResults:\n"
-            + "\n".join(f"🛠️ {c['tool']}: {c['result']}" for c in ctx)
-            + "\nSummarize."
-        )
+        return await self._chat(f"Query: {query}\nResults:\n" + "\n".join(f"🛠️ {c['tool']}: {c['result']}" for c in ctx) + "\nSummarize.")
 
     async def _chat(self, p: str) -> str:
         try:
