@@ -66,7 +66,7 @@ class AgentLoop:
         try:
             res = await asyncio.wait_for(
                 self.skill_executor.run_skill(skill, user_id, query, initial_vars=params),
-                timeout=15.0,
+                timeout=30.0,
             )
             return (
                 f"✅ {skill.name} completed."
@@ -80,7 +80,7 @@ class AgentLoop:
 
     async def _run_tool_loop(self, query: str, user_id: int) -> str:
         try:
-            steps = await asyncio.wait_for(plan(query, self.registry), timeout=10.0)
+            steps = await asyncio.wait_for(plan(query, self.registry), timeout=30.0)
             if not steps:
                 logger.warning("📋 Planner returned empty. Fallback to direct execution.")
                 return await self._chat(query)
@@ -97,7 +97,7 @@ class AgentLoop:
                         func(
                             query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude}
                         ),
-                        timeout=10.0,
+                        timeout=30.0,
                     )
                     ctx.append(f"🛠️ {t}: {str(res)[:100]}")
                 except Exception as e:
@@ -115,7 +115,7 @@ class AgentLoop:
             kwargs = {"prompt": p}
             if "context" in sig.parameters:
                 kwargs["context"] = []
-            resp = await asyncio.wait_for(self.client.chat(**kwargs), timeout=10.0)
+            resp = await asyncio.wait_for(self.client.chat(**kwargs), timeout=30.0)
             return (resp or "").strip() or "🤖 Готово."
         except TimeoutError:
             return "⏱️ LLM timeout (10s)"
