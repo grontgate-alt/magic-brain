@@ -1,16 +1,24 @@
-"""🔄 Agent Loop v2.1: Zero-Crash, Direct Execution, Safe LLM"""
+"""🔄 Agent Loop v2.2: Production-Hardened, Zero-LLM-Block, Systemd-Ready"""
 
 import asyncio
-import json
+import inspect
 import logging
 import os
 import re
+import sys
 
 from agents.brain.planner import plan
 from agents.skills.executor import SkillExecutor
 from agents.skills.schema import SkillsRegistry
 from privacy.local_llm.openrouter_client import OpenRouterClient
 
+# 📢 Гарантированный вывод в stderr (systemd/journalctl)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)],
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -26,22 +34,21 @@ class AgentLoop:
         self.skill_executor = SkillExecutor()
 
     async def run(self, query: str, user_id: int = 1, force_mode: str = None) -> str:
+        logger.info(f"📥 RUN: force={force_mode}, q='{query[:60]}'")
         try:
-            if force_mode not in ["tools", "skills"]:
-                return await self._chat(query)
+            if force_mode == "skills":
+                sid = self._detect_skill_fast(query)
+                if sid:
+                    return await self._execute_skill(sid, user_id, query)
+                return "⚠️ Скил не найден. Пример: 'запусти hello_world'"
 
-            skill_id = self._detect_skill_fast(query)
-            if skill_id:
-                return await self._execute_skill(skill_id, user_id, query)
+            if force_mode == "tools":
+                return await self._run_tool_loop(query, user_id)
 
-            intent = await self._route_intent(query)
-            if intent.get("type") == "skill" and intent.get("skill_id"):
-                return await self._execute_skill(intent["skill_id"], user_id, query)
-
-            return await self._run_tool_loop(query, user_id)
-        except Exception as e:
-            logger.error(f"💥 AgentLoop.run crashed: {e}")
-            return "⚠️ System fallback: запрос принят."
+            return await self._chat(query)
+        except Exception:
+            logger.exception("💥 CRASH in run()")
+            return "⚠️ Внутренняя ошибка. Запрос записан в лог."
 
     def _detect_skill_fast(self, query: str) -> str | None:
         q = query.lower()
@@ -51,47 +58,33 @@ class AgentLoop:
         return None
 
     async def _execute_skill(self, skill_id: str, user_id: int, query: str) -> str:
+        logger.info(f"🎯 Executing Skill: {skill_id}")
         if skill_id not in self.skills_registry._registry:
             return f"⚠️ Skill '{skill_id}' not found"
         skill = self.skills_registry.get(skill_id)
-        params = await self._extract_params(query)
+        params = {"file_path": m.group(1)} if (m := re.search(r"(/[\w/.\-]+)", query)) else {}
         try:
             res = await asyncio.wait_for(
                 self.skill_executor.run_skill(skill, user_id, query, initial_vars=params),
-                timeout=30.0,
+                timeout=15.0,
             )
-            if res.get("success"):
-                return f"✅ {skill.name} completed."
-            return f"⚠️ Failed: {res.get('error', 'unknown')}"
+            return (
+                f"✅ {skill.name} completed."
+                if res.get("success")
+                else f"⚠️ Failed: {res.get('error')}"
+            )
+        except TimeoutError:
+            return "⏱️ Skill timeout (15s)"
         except Exception as e:
             return f"⚠️ Skill error: {e}"
 
-    async def _extract_params(self, query: str) -> dict:
-        p = {}
-        m = re.search(r"(/[\w/.\-]+)", query)
-        if m:
-            p["file_path"] = m.group(1)
-        return p
-
-    async def _route_intent(self, query: str) -> dict:
-        try:
-            skills = ", ".join([s.id for s in self.skills_registry._registry.values()])
-            prompt = (
-                f'Q: {query}\nSkills: {skills}\nJSON: {{"type":"skill"|"tools","skill_id":"id"}}'
-            )
-            r = await asyncio.wait_for(self.client.chat(prompt=prompt), timeout=5.0)
-            m = re.search(r"\{.*\}", r or "", re.DOTALL)
-            if m:
-                return json.loads(m.group())
-        except Exception:
-            pass
-        return {"type": "tools"}
-
     async def _run_tool_loop(self, query: str, user_id: int) -> str:
         try:
-            steps = await plan(query, self.registry)
+            steps = await asyncio.wait_for(plan(query, self.registry), timeout=10.0)
             if not steps:
+                logger.warning("📋 Planner returned empty. Fallback to direct execution.")
                 return await self._chat(query)
+
             ctx = []
             for step in steps[:3]:
                 t, a = step.get("tool"), step.get("args", {})
@@ -99,28 +92,39 @@ class AgentLoop:
                     continue
                 try:
                     exclude = {"q", "ctx", "uid", "query", "context", "user_id", "self", "tn"}
-                    res = await self.registry.skills[t]["func"](
-                        query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude}
+                    func = self.registry.skills[t]["func"]
+                    res = await asyncio.wait_for(
+                        func(
+                            query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude}
+                        ),
+                        timeout=10.0,
                     )
                     ctx.append(f"🛠️ {t}: {str(res)[:100]}")
-                except Exception:
-                    continue
-            if not ctx:
-                return await self._chat(query)
-            return "\n".join(ctx)
+                except Exception as e:
+                    logger.error(f"❌ Tool {t} failed: {e}")
+            return "\n".join(ctx) if ctx else await self._chat(query)
         except Exception as e:
             logger.error(f"💥 Tool loop failed: {e}")
             return await self._chat(query)
 
     async def _chat(self, p: str) -> str:
+        if not self.client:
+            return "🤖 LLM client unavailable."
         try:
-            r = await asyncio.wait_for(self.client.chat(prompt=p, context=[]), timeout=10.0)
-            return r or "🤖 Готово."
-        except Exception:
-            return "🤖 (LLM недоступен) Запрос обработан локально."
+            sig = inspect.signature(self.client.chat)
+            kwargs = {"prompt": p}
+            if "context" in sig.parameters:
+                kwargs["context"] = []
+            resp = await asyncio.wait_for(self.client.chat(**kwargs), timeout=10.0)
+            return (resp or "").strip() or "🤖 Готово."
+        except TimeoutError:
+            return "⏱️ LLM timeout (10s)"
+        except Exception as e:
+            logger.warning(f"⚠️ LLM chat failed: {e}")
+            return "🤖 (LLM недоступен) Локальная обработка завершена."
 
 
-# 🔌 Backward compatibility for orchestrator.py & API
+# 🔌 Backward compatibility for orchestrator.py
 _default_loop = None
 
 
