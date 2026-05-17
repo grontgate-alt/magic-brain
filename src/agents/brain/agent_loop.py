@@ -1,5 +1,6 @@
-"""🔄 Agent Loop v2.0: Supports Tools (v1) & Skills (v2 Workflow Engine)"""
+"""🔄 Agent Loop v2.0: Tools (v1) & Skills (v2)"""
 
+import asyncio
 import json
 import logging
 import os
@@ -18,88 +19,104 @@ class AgentLoop:
         self.registry = registry
         self.max_retries = 2
         self.client = OpenRouterClient(api_key=os.getenv("OPENROUTER_API_KEY"))
-
-        # v2.0: Инициализация реестра скилов
         self.skills_registry = SkillsRegistry()
         self.skills_registry.load()
         self.skill_executor = SkillExecutor()
 
     async def run(self, query: str, user_id: int = 1, force_mode: str = None) -> str:
-        # 1. Чат-режим по умолчанию
         if force_mode not in ["tools", "skills"]:
             return await self._chat(query)
-
-        # 2. Маршрутизация: LLM решает Skill или Tool
         intent = await self._route_intent(query)
 
-        # 3. v2.0: Выполнение скила
         if intent.get("type") == "skill" and intent.get("skill_id"):
-            skill_id = intent["skill_id"]
-            if skill_id in self.skills_registry._registry:
-                logger.info(f"🧠 Routing to Skill: {skill_id}")
-                skill_def = self.skills_registry.get(skill_id)
-                res = await self.skill_executor.run_skill(skill_def, user_id, query)
-                if res["success"]:
-                    return f"✅ {skill_def.name} completed."
-                return f"⚠️ Skill failed: {res.get('error', 'unknown')}"
+            sid = intent["skill_id"]
+            if sid in self.skills_registry._registry:
+                logger.info(f"🧠 Routing to Skill: {sid}")
+                params = await self._extract_params(query)
+                try:
+                    res = await asyncio.wait_for(
+                        self.skill_executor.run_skill(
+                            self.skills_registry.get(sid), user_id, query, initial_vars=params
+                        ),
+                        timeout=60.0,
+                    )
+                    return (
+                        f"✅ {self.skills_registry.get(sid).name} completed."
+                        if res["success"]
+                        else f"⚠️ Failed: {res.get('error')}"
+                    )
+                except TimeoutError:
+                    return "⏱️ Skill timeout"
 
-        # 4. Fallback v1.0: Планировщик инструментов
-        logger.info("🛠️ Routing to v1 Tool Planner")
+        logger.info("🛠️ Fallback to v1 Tool Planner")
         return await self._run_tool_loop(query, user_id)
 
+    async def _extract_params(self, query: str) -> dict:
+        p = {}
+        paths = re.findall(r"(/\S+)", query)
+        if paths:
+            p["file_path"] = paths[0]
+        for k, v in re.findall(r"(\w+)[:=](\S+)", query):
+            p[k.lower()] = v
+        return p
+
     async def _route_intent(self, query: str) -> dict:
-        skills_list = "\n".join(
+        skills = "\n".join(
             [f"- {s.id}: {s.description}" for s in self.skills_registry._registry.values()]
         )
         prompt = f"""Analyze: "{query}"
-Available Skills: {skills_list or "None"}
-Return STRICT JSON: {{"type": "skill"|"tools"|"chat", "skill_id": "id_if_skill"}}"""
+Available Skills: {skills or "None"}
+Return JSON: {{"type": "skill"|"tools", "skill_id": "id_if_skill"}}"""
         try:
-            resp = await self.client.chat(prompt=prompt, temperature=0.1)
-            m = re.search(r"\{.*\}", resp, re.DOTALL)
+            r = await asyncio.wait_for(
+                self.client.chat(prompt=prompt, temperature=0.1), timeout=15.0
+            )
+            m = re.search(r"\{.*\}", r, re.DOTALL)
             if m:
                 return json.loads(m.group())
+        except TimeoutError:
+            logger.warning("⏱️ Routing timeout")
         except Exception as e:
-            logger.warning(f"⚠️ Intent routing failed: {e}")
+            logger.warning(f"⚠️ Routing fail: {e}")
         return {"type": "tools"}
 
     async def _run_tool_loop(self, query: str, user_id: int) -> str:
         steps = await plan(query, self.registry)
         if not steps:
             return await self._chat(query)
-
-        context = []
-        for attempt in range(self.max_retries + 1):
-            success = True
+        ctx = []
+        for att in range(self.max_retries + 1):
+            ok = True
             for step in steps:
-                tool_name = step.get("tool")
-                args = step.get("args", {})
-                if tool_name not in self.registry.skills:
-                    success = False
+                t, a = step.get("tool"), step.get("args", {})
+                if t not in self.registry.skills:
+                    ok = False
                     break
                 try:
-                    func = self.registry.skills[tool_name]["func"]
                     exclude = {"q", "ctx", "uid", "query", "context", "user_id", "self", "tn"}
-                    tool_args = {k: v for k, v in args.items() if k not in exclude}
-                    res = await func(query, context, user_id, **tool_args)
-                    context.append({"tool": tool_name, "result": str(res)[:500]})
+                    res = await self.registry.skills[t]["func"](
+                        query, ctx, user_id, **{k: v for k, v in a.items() if k not in exclude}
+                    )
+                    ctx.append({"tool": t, "result": str(res)[:500]})
                 except Exception as e:
-                    logger.error(f"❌ {tool_name}: {e}")
-                    success = False
-                    if attempt < self.max_retries:
-                        steps = await replan(str(e), context, self.registry)
+                    logger.error(f"❌ {t}: {e}")
+                    ok = False
+                    if att < self.max_retries:
+                        steps = await replan(str(e), ctx, self.registry)
                     break
-            if success or not steps:
+            if ok or not steps:
                 break
-
-        if not context:
+        if not ctx:
             return await self._chat(query)
-        summary = "\n".join([f"🛠️ {c['tool']}: {c['result']}" for c in context])
-        return await self._chat(f"Query: {query}\nResults:\n{summary}\nSummarize for user.")
+        return await self._chat(
+            f"Query: {query}\nResults:\n"
+            + "\n".join(f"🛠️ {c['tool']}: {c['result']}" for c in ctx)
+            + "\nSummarize."
+        )
 
-    async def _chat(self, prompt: str) -> str:
+    async def _chat(self, p: str) -> str:
         try:
-            return await self.client.chat(prompt=prompt, context=[])
+            return await self.client.chat(prompt=p, context=[])
         except Exception as e:
-            logger.error(f"❌ Chat fallback failed: {e}")
-            return "⚠️ Processing error."
+            logger.error(f"❌ Chat fail: {e}")
+            return "⚠️ Error"
