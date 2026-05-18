@@ -1,75 +1,39 @@
-"""🧭 Planner v2.3: Strict JSON Tool Planning"""
-import logging, json, re
-from typing import List, Dict, Optional
+"""🧭 Planner v2.3: Strict JSON + Chaining Logic"""
+import asyncio
+import json
+import logging
+import re
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-# 🎯 Системный промпт: жёсткие правила
-SYSTEM_PROMPT = """You are a tool planner. You MUST output STRICT JSON array of tool calls.
-Available tools: write_file, execute_bash, web_search, read_file, smart_file_op.
-Rules:
-1. Return ONLY JSON array: [{"tool": "name", "args": {"key": "value"}}]
-2. For file creation: use write_file with path and content
-3. For poetry: use web_search first, then write_file
-4. NEVER output markdown, explanations, or bash snippets — only JSON
-5. If task is impossible, return []
-
-Example for "create file with Pushkin poem":
-[
-  {"tool": "web_search", "args": {"query": "Пушкин Руслан и Людмила начало текст"}},
-  {"tool": "write_file", "args": {"path": "/home/der/111.txt", "content": "{{search_result}}"}}
-]
-"""
+SYSTEM_PROMPT = """You are an AI tool planner. Return ONLY a valid JSON array of tool steps.
+Tools: "web_search", "write_file", "read_file", "execute_bash".
+RULES:
+1. If user asks to find info and create a file -> Use "web_search" then "write_file".
+2. In the second step, use the output of the first step via Jinja: "{{step_0_result}}".
+3. NEVER output markdown or explanations. ONLY JSON.
+Example: [{"tool": "web_search", "args": {"query": "Pushkin poem text"}}, {"tool": "write_file", "args": {"path": "/tmp/poem.txt", "content": "{{step_0_result}}"}}]"""
 
 async def plan(query: str, registry) -> List[Dict]:
-    """Returns list of tool calls: [{"tool": "...", "args": {...}}]"""
     from privacy.local_llm.openrouter_client import OpenRouterClient
-    
     client = OpenRouterClient(api_key=__import__('os').getenv("OPENROUTER_API_KEY"))
-    if not client:
-        logger.warning("⚠️ No LLM client, empty plan")
-        return []
-    
-    tools_list = ", ".join([k for k in registry.skills.keys() if not k.startswith("_")])
-    prompt = f"Task: {query}\nTools: {tools_list}\nReturn JSON array of tool calls."
-    
+    if not client: return []
+
+    prompt = f"{SYSTEM_PROMPT}
+User Task: {query}
+JSON:"
     try:
-        # Запрос с жёстким температурным контролем
-        response = await client.chat(
-            prompt=f"{SYSTEM_PROMPT}\n\nUser: {prompt}",
-            temperature=0.0,  # Детерминированный вывод
-            max_tokens=500
-        )
+        resp = await client.chat(prompt=prompt, temperature=0.0)
+        match = re.search(r'\[.*\]', resp, re.DOTALL)
+        if not match: return []
         
-        # Извлекаем JSON из ответа
-        match = re.search(r'\[.*\]', response, re.DOTALL)
-        if not match:
-            logger.warning(f"⚠️ Planner: no JSON in response: {response[:100]}")
-            return []
-        
-        plan_result = json.loads(match.group())
-        if not isinstance(plan_result, list):
-            logger.warning("⚠️ Planner: response is not array")
-            return []
-        
-        # Валидация: каждый шаг должен иметь tool и args
-        validated = []
-        for step in plan_result:
-            if isinstance(step, dict) and "tool" in step and "args" in step:
-                if step["tool"] in registry.skills:
-                    validated.append(step)
-                else:
-                    logger.warning(f"⚠️ Unknown tool: {step['tool']}")
-        
-        logger.info(f"🧭 Plan: {len(validated)} steps")
-        return validated
-        
+        result = json.loads(match.group())
+        known_tools = registry.skills.keys()
+        return [step for step in result if isinstance(step, dict) and step.get("tool") in known_tools]
     except Exception as e:
-        logger.error(f"💥 Planner error: {e}")
+        logger.error(f"💥 Planner failed: {e}")
         return []
 
-async def replan(error: str, context: List, registry) -> List[Dict]:
-    """Replan after error — упрощённая версия"""
-    logger.warning(f"🔄 Replanning after: {error[:50]}")
-    # Возвращаем пустой план — fallback на чат
+async def replan(error, ctx, reg):
     return []
